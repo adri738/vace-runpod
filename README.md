@@ -35,7 +35,7 @@ JupyterLab → Terminal, then:
 
 ```bash
 cd /workspace
-curl -fsSL https://raw.githubusercontent.com/<GITHUB_USER>/vace-runpod/main/provision_vace.sh -o provision_vace.sh
+curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_vace.sh -o provision_vace.sh
 bash provision_vace.sh --restart-comfyui
 ```
 
@@ -61,7 +61,7 @@ Same fallback command — it re-downloads only what's missing.
 Container Start Command (one line, exactly):
 
 ```
-{"entrypoint": ["bash", "-c", "nohup bash -c 'i=0; while [ ! -d /workspace/runpod-slim/ComfyUI/custom_nodes ] && [ $i -lt 120 ]; do sleep 5; i=$((i+1)); done; sleep 30; curl -fsSL https://raw.githubusercontent.com/<GITHUB_USER>/vace-runpod/main/provision_vace.sh -o /workspace/provision_vace.sh; bash /workspace/provision_vace.sh --restart-comfyui' > /workspace/provision-boot.log 2>&1 & exec /start.sh"]}
+{"entrypoint": ["bash", "-c", "nohup bash -c 'i=0; while [ ! -d /workspace/runpod-slim/ComfyUI/custom_nodes ] && [ $i -lt 120 ]; do sleep 5; i=$((i+1)); done; sleep 30; curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_vace.sh -o /workspace/provision_vace.sh; bash /workspace/provision_vace.sh --restart-comfyui' > /workspace/provision-boot.log 2>&1 & exec /start.sh"]}
 ```
 
 What it does: starts the official image's `/start.sh` unchanged; in the
