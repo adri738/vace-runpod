@@ -1,0 +1,8 @@
+# Creator's paid/reference material — never publish
+VACE_IMAGE-TO-VIDEO_CONTROLNET.json
+VACE_AUTO_INSTALL-RUNPOD.sh
+instructions_aitrepeneur_comfyui_videoVACE.txt
+
+# Debugging artifacts from the old pod
+comfyui_error.log
+error_screenshot.png
