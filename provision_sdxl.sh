@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # provision_sdxl.sh — sets up SDXL (Illustrious) models on the
-# ashleykza/forge image (Stable Diffusion WebUI Forge for RunPod).
+# dcainet/forge-min image (Stable Diffusion WebUI Forge for RunPod).
 #
 # Idempotent: safe on every boot; skips whatever already exists.
 #
 # Usage:
 #   bash provision_sdxl.sh          # manual run (Jupyter terminal)
 #   bash provision_sdxl.sh --boot   # boot mode: waits for the image's
-#                                   # first-boot sync before starting
-#
-# Optional: set UPDATE_FORGE=true (env var) to git-pull Forge upstream.
+#                                   # first-boot Forge build before starting
 set -uo pipefail
 
 MODE="${1:-}"
@@ -19,22 +17,46 @@ exec > >(tee -a "$LOG") 2>&1
 echo ""
 echo "════ SDXL Forge provisioning started: $(date) ════"
 
-FORGE="/workspace/stable-diffusion-webui-forge"
+find_dirs() {
+    # forge-min layout first, classic layouts as fallback
+    FORGE=""
+    MODELS=""
+    for d in /workspace/forge/stable-diffusion-webui-forge /workspace/stable-diffusion-webui-forge; do
+        [[ -d "$d" ]] && { FORGE="$d"; break; }
+    done
+    if [[ -d /workspace/forge/models ]]; then
+        MODELS="/workspace/forge/models"
+    elif [[ -n "$FORGE" && -d "$FORGE/models" ]]; then
+        MODELS="$FORGE/models"
+    fi
+}
 
-# ── 1. In boot mode, wait for the image to finish copying Forge ────
+# ── 1. In boot mode, wait for the image's first-boot Forge build ───
+find_dirs
 if [[ "$MODE" == "--boot" ]]; then
     WAITED=0
-    until [[ -d "$FORGE/models" ]] || [[ $WAITED -ge 900 ]]; do
+    until [[ -n "$MODELS" ]] || [[ $WAITED -ge 1500 ]]; do
         sleep 10
         WAITED=$((WAITED+10))
+        find_dirs
     done
 fi
-if [[ ! -d "$FORGE/models" ]]; then
-    echo "❌ Forge not found at $FORGE — aborting."
-    echo "   (Is this pod using the ashleykza/forge image? Did first-boot sync finish?)"
+if [[ -z "$MODELS" ]]; then
+    echo "❌ Forge models folder not found under /workspace — aborting."
+    echo "   (Is this pod using the dcainet/forge-min image? Did the first-boot build finish?)"
     exit 1
 fi
-echo "Forge root: $FORGE"
+echo "Forge root: ${FORGE:-not found yet}"
+echo "Models dir: $MODELS"
+
+# Embeddings folder: forge-min keeps it under models/, classic keeps it in the webui root
+if [[ -d "$MODELS/embeddings" ]]; then
+    EMBED="$MODELS/embeddings"
+elif [[ -n "$FORGE" ]]; then
+    EMBED="$FORGE/embeddings"
+else
+    EMBED="$MODELS/embeddings"
+fi
 
 FAILED=()
 
@@ -53,26 +75,36 @@ grab() {   # grab <target path> <url>
 
 echo "──── models ────"
 # Checkpoint (6.9 GB)
-grab "$FORGE/models/Stable-diffusion/waiNSFWIllustrious_v120.safetensors" \
+grab "$MODELS/Stable-diffusion/waiNSFWIllustrious_v120.safetensors" \
      "https://huggingface.co/marix64/NSFWIllustriousModel/resolve/main/waiNSFWIllustrious_v120.safetensors?download=true"
 # LoRA (362 MB)
-grab "$FORGE/models/Lora/extreme-sex-v1.0-illustriousxl.safetensors" \
+grab "$MODELS/Lora/extreme-sex-v1.0-illustriousxl.safetensors" \
      "https://huggingface.co/marix64/NSFWIllustriousModel/resolve/main/extreme-sex-v1.0-illustriousxl.safetensors?download=true"
 # Embedding (295 KB) — NOT a LoRA; used by typing "lazypos" in the prompt
-grab "$FORGE/embeddings/lazypos.safetensors" \
+grab "$EMBED/lazypos.safetensors" \
      "https://huggingface.co/marix64/NSFWIllustriousModel/resolve/main/lazypos.safetensors?download=true"
 # ControlNet Union SDXL (2.5 GB) — renamed from its meaningless original name
-grab "$FORGE/models/ControlNet/controlnet-union-sdxl-1.0.safetensors" \
+grab "$MODELS/ControlNet/controlnet-union-sdxl-1.0.safetensors" \
      "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model.safetensors?download=true"
 
-# ── 3. Optional Forge update (off by default; pin philosophy) ──────
-if [[ "${UPDATE_FORGE:-}" == "true" ]]; then
-    echo "──── updating Forge (UPDATE_FORGE=true) ────"
-    git -C "$FORGE" pull https://github.com/lllyasviel/stable-diffusion-webui-forge.git || FAILED+=("forge update")
-fi
+# (Forge updates: use the image's native AUTO_UPDATE_FORGE=true env var if
+#  ever needed — deliberately off by default, same pin philosophy as VACE.)
 
-# ── 4. Quicksettings: add Clip Skip control to the top bar ─────────
+# ── 3. Quicksettings: add Clip Skip control to the top bar ─────────
 echo "──── config ────"
+if [[ -z "$FORGE" ]]; then
+    # Forge dir may appear after models dir on first boot — wait a bit more
+    WAITED=0
+    until [[ -n "$FORGE" ]] || [[ $WAITED -ge 600 ]]; do
+        sleep 10
+        WAITED=$((WAITED+10))
+        find_dirs
+    done
+fi
+if [[ -z "$FORGE" ]]; then
+    FAILED+=("config patch (Forge dir never appeared)")
+    CHANGED="skipped"
+else
 CHANGED=$(python3 - "$FORGE/config.json" <<'PYEOF'
 import json, os, sys
 p = sys.argv[1]
@@ -93,29 +125,23 @@ with open(p, "w") as f:
 print("changed")
 PYEOF
 )
+fi
 if [[ "$CHANGED" == "error" ]]; then
     FAILED+=("config patch (config.json unreadable)")
 fi
 echo "quicksettings CLIP_stop_at_last_layers: $CHANGED"
 
-# ── 5. Restart the WebUI if the config changed while it was running ─
-if [[ "$CHANGED" == "changed" ]] && pgrep -f "webui.sh|launch.py" >/dev/null 2>&1; then
-    echo "Restarting Forge so the new setting loads..."
-    pkill -f "launch.py" 2>/dev/null || true
-    pkill -f "webui.sh" 2>/dev/null || true
-    sleep 3
-    if [[ -x /start_forge.sh ]]; then
-        /start_forge.sh
-        echo "Forge restarting — WebUI ready on port 3001 in ~1 minute."
-    else
-        echo "⚠️  /start_forge.sh not found — stop/start the pod to load the setting."
-    fi
+# ── 4. If the setting changed while Forge was already running ──────
+if [[ "$CHANGED" == "changed" ]] && pgrep -f "launch.py|webui.sh" >/dev/null 2>&1; then
+    echo "ℹ️  Forge was already running: to see the Clip Skip box in the top bar,"
+    echo "   click 'Reload UI' at the bottom of Forge's Settings tab"
+    echo "   (or Stop → Start the pod once)."
 fi
 
-# ── 6. Summary ──────────────────────────────────────────────────────
+# ── 5. Summary ──────────────────────────────────────────────────────
 echo "──────────────────────────────────"
 if [[ ${#FAILED[@]} -eq 0 ]]; then
-    echo "✅ SDXL provisioning finished — Forge is ready on port 3001."
+    echo "✅ SDXL provisioning finished — Forge is ready on port 7860."
 else
     echo "⚠️  Finished with ${#FAILED[@]} problem(s):"
     printf '   ❌ %s\n' "${FAILED[@]}"
