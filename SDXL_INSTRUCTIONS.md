@@ -56,8 +56,14 @@ notebook-based ffxvs template. Forge auto-starts; my models auto-download.
 Container Start Command (one line, exactly):
 
 ```
-bash -c 'nohup sh -c "sleep 20; curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_sdxl.sh -o /workspace/provision_sdxl.sh; bash /workspace/provision_sdxl.sh --boot" > /workspace/provision-boot.log 2>&1 & /usr/local/bin/entrypoint.sh'
+bash -c 'curl -fsSL --max-time 60 https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_sdxl.sh -o /workspace/provision_sdxl.sh; bash /workspace/provision_sdxl.sh --pre; nohup bash /workspace/provision_sdxl.sh --boot > /workspace/provision-boot.log 2>&1 & exec /usr/local/bin/entrypoint.sh'
 ```
+
+The `--pre` step fixes Forge's broken CLIP install (a 2026 pkg_resources
+incompatibility that crash-loops the stock image) BEFORE Forge launches.
+On a completely empty volume the very first boot may still show one Forge
+crash right after the ~15-min build — the container restarts itself once
+and the fix applies on that second boot. Boots after that are clean.
 
 Notes:
 - Forge paths in this image: webui `/workspace/forge/stable-diffusion-webui-forge`,
