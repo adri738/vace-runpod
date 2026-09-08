@@ -67,6 +67,38 @@ sanitize_requirements() {
         "$input" > "$output" || true
 }
 
+# filename|comfyui models subdirectory|exact size in bytes
+#
+# Sizes read from the HuggingFace tree API on 2026-09-08. They are the
+# contract that safetensors_ok checks each download against, so they must
+# never be edited by hand — regenerate them from the API if the mirror
+# content ever changes.
+MODEL_MANIFEST='
+qwen3vl_32b_minimax_h3_int8_convrot.safetensors|text_encoders|27141342152
+minimax_h3_fl2va_pruned_int8_convrot.safetensors|diffusion_models|20970379616
+minimax_h3_ref2va_pruned_int8_convrot.safetensors|diffusion_models|20970379616
+minimax_h3_t1_image_vae_step1597.safetensors|vae|5207808784
+minimax_h3_video_vae_fp16.safetensors|vae|5207808496
+sam3.1_multiplex_fp16.safetensors|checkpoints|1745546848
+minimax_h3_latent_upscaler_3d_fp16.safetensors|latent_upscale_models|690592672
+minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors|loras|620285592
+minimax_h3_audio_vae_fp32.safetensors|vae|605254808
+taeh3.safetensors|vae_approx|9791388
+'
+
+WORKFLOW_FILES='
+MINIMAX_H3_ULTRA_WORKFLOW-V3.json
+MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json
+'
+
+manifest_lines() {
+    printf '%s\n' "$MODEL_MANIFEST" | grep -vE '^[[:space:]]*(#|$)'
+}
+
+workflow_lines() {
+    printf '%s\n' "$WORKFLOW_FILES" | grep -vE '^[[:space:]]*(#|$)'
+}
+
 main() {
     log "provision_minimax.sh: no phases implemented yet"
 }

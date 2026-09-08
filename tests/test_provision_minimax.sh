@@ -115,4 +115,32 @@ printf 'torch\nnumpy\n' > "$TMP/allblocked.txt"
 sanitize_requirements "$TMP/allblocked.txt" "$TMP/allblocked.out"
 assert_eq "all-blocked file yields no lines" "0" "$(grep -c . "$TMP/allblocked.out")"
 
+echo "-- model manifest --"
+
+assert_eq "manifest has 10 entries" "10" "$(manifest_lines | grep -c .)"
+
+assert_eq "manifest totals 83169189972 bytes" "83169189972" \
+    "$(manifest_lines | awk -F'|' '{s += $3} END {printf "%d", s}')"
+
+assert_eq "no duplicate filenames" "0" \
+    "$(manifest_lines | cut -d'|' -f1 | sort | uniq -d | grep -c .)"
+
+assert_eq "every line has three fields" "0" \
+    "$(manifest_lines | awk -F'|' 'NF != 3' | grep -c .)"
+
+assert_eq "every size is a positive integer" "0" \
+    "$(manifest_lines | awk -F'|' '$3 !~ /^[1-9][0-9]*$/' | grep -c .)"
+
+assert_eq "every subdir is a known ComfyUI models folder" "0" \
+    "$(manifest_lines | awk -F'|' '
+        $2 != "text_encoders" && $2 != "diffusion_models" && $2 != "vae" &&
+        $2 != "checkpoints" && $2 != "loras" && $2 != "vae_approx" &&
+        $2 != "latent_upscale_models"' | grep -c .)"
+
+assert_eq "text encoder is present at its exact size" "27141342152" \
+    "$(manifest_lines | awk -F'|' '$1 == "qwen3vl_32b_minimax_h3_int8_convrot.safetensors" {print $3}')"
+
+assert_eq "reference-to-video model is present" "1" \
+    "$(manifest_lines | grep -c '^minimax_h3_ref2va_pruned_int8_convrot\.safetensors|diffusion_models|')"
+
 finish
