@@ -654,15 +654,17 @@ Append to `.gitignore`:
 MINIMAX_*WORKFLOW*.json
 ```
 
-Verify the rule works:
+Verify the rule works. Do **not** copy a real workflow JSON into the repo to test this — even
+briefly, that puts paid content inside the working tree. `git check-ignore` answers the same
+question from the filename alone:
 
 ```bash
-cp "C:/Users/Trabajo/OneDrive/Mis_Proyectos/4ADULTZ/documentos/Minimax/MINIMAX_H3_ULTRA_WORKFLOW-V3.json" .
-git status --short | grep MINIMAX_H3_ULTRA_WORKFLOW-V3.json && echo "BAD: not ignored" || echo "ok: ignored"
-rm -f MINIMAX_H3_ULTRA_WORKFLOW-V3.json
+git check-ignore -v MINIMAX_H3_ULTRA_WORKFLOW-V3.json
+git check-ignore -v MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json
 ```
 
-Expected: `ok: ignored`.
+Expected: both print the `.gitignore` line number and the matching pattern, and exit 0. No
+output means the rule does not match — fix the pattern.
 
 - [ ] **Step 2: Write the mirror script**
 
@@ -970,11 +972,19 @@ Record every answer. Three consequences:
 
 - [ ] **Step 3: Run the mirror**
 
-Still in the same pod terminal:
+At this point `mirror_minimax.sh` exists only on the local branch, which has not been pushed —
+there is nothing to `curl` yet. Get it onto the pod the same way you already move the
+creator's installer: drag `mirror_minimax.sh` from the repo folder on your PC into
+JupyterLab's `/workspace` panel.
+
+(If the branch has been pushed to GitHub by then, `curl -fsSL
+https://raw.githubusercontent.com/adri738/vace-runpod/minimax-h3-template/mirror_minimax.sh -o
+mirror_minimax.sh` works instead. Either route is fine.)
+
+Then, in the pod terminal:
 
 ```bash
 cd /workspace
-curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/minimax-h3-template/mirror_minimax.sh -o mirror_minimax.sh
 export HF_WRITE_TOKEN=hf_xxxxxxxx   # paste a WRITE token from huggingface.co/settings/tokens
 bash mirror_minimax.sh
 ```
