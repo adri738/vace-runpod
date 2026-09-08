@@ -51,6 +51,22 @@ safetensors_ok() {
         | grep -q '"data_offsets"'
 }
 
+# sanitize_requirements <input> <output>
+#
+# Strips packages that belong to the image's GPU runtime. A custom node
+# pinning "torch==2.3" would silently replace the CUDA 13 build and break
+# every GPU operation on the pod. The name alternation is anchored so that
+# "torch" is dropped while "torchsde" — a real, unrelated dependency — is
+# kept. The nvidia-/cuda- families need their own prefix branch because
+# their real names carry suffixes (nvidia-cublas-cu12).
+sanitize_requirements() {
+    local input="$1" output="$2"
+
+    grep -Eiv \
+        '^[[:space:]]*((torch|torchvision|torchaudio|xformers|triton|sageattention|numpy|transformers|tokenizers|huggingface[-_]hub|hf[-_]xet|pillow|accelerate|safetensors|comfyui[-_]frontend[-_]package|comfyui[-_]workflow[-_]templates|comfyui[-_]embedded[-_]docs)|(nvidia|cuda)[-_][A-Za-z0-9._-]*)([[:space:]]*[<>=!~[].*)?[[:space:]]*$' \
+        "$input" > "$output" || true
+}
+
 main() {
     log "provision_minimax.sh: no phases implemented yet"
 }

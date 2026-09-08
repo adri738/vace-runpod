@@ -51,4 +51,68 @@ printf 'ABCD' >> "$TMP/nooffsets.safetensors"
 assert_fail "header without data_offsets" \
     safetensors_ok "$TMP/nooffsets.safetensors" "$(stat -c%s "$TMP/nooffsets.safetensors")"
 
+echo "-- sanitize_requirements --"
+
+cat > "$TMP/req.txt" <<'REQ'
+# a comment line
+torch>=2.4.0
+torchvision
+torchaudio==2.4.0
+torchsde
+xformers
+triton
+sageattention
+numpy<2
+transformers==4.44.0
+tokenizers
+huggingface-hub
+huggingface_hub>=0.24
+hf-xet
+pillow
+accelerate
+safetensors
+nvidia-cublas-cu12==12.4.5.8
+cuda-python
+comfyui-frontend-package
+imageio-ffmpeg
+opencv-python-headless
+scipy
+
+REQ
+
+sanitize_requirements "$TMP/req.txt" "$TMP/clean.txt"
+
+kept_present() { grep -qxF "$1" "$TMP/clean.txt"; }
+line_absent()  { ! grep -qiE "^[[:space:]]*$1([<>=!~[]|[[:space:]]*$)" "$TMP/clean.txt"; }
+
+assert_ok   "keeps torchsde"                kept_present "torchsde"
+assert_ok   "keeps imageio-ffmpeg"          kept_present "imageio-ffmpeg"
+assert_ok   "keeps opencv-python-headless"  kept_present "opencv-python-headless"
+assert_ok   "keeps scipy"                   kept_present "scipy"
+assert_ok   "keeps comments"                kept_present "# a comment line"
+
+assert_ok   "drops torch"                   line_absent "torch"
+assert_ok   "drops torchvision"             line_absent "torchvision"
+assert_ok   "drops torchaudio"              line_absent "torchaudio"
+assert_ok   "drops xformers"                line_absent "xformers"
+assert_ok   "drops triton"                  line_absent "triton"
+assert_ok   "drops sageattention"           line_absent "sageattention"
+assert_ok   "drops numpy"                   line_absent "numpy"
+assert_ok   "drops transformers"            line_absent "transformers"
+assert_ok   "drops tokenizers"              line_absent "tokenizers"
+assert_ok   "drops huggingface-hub"         line_absent "huggingface-hub"
+assert_ok   "drops huggingface_hub"         line_absent "huggingface_hub"
+assert_ok   "drops hf-xet"                  line_absent "hf-xet"
+assert_ok   "drops pillow"                  line_absent "pillow"
+assert_ok   "drops accelerate"              line_absent "accelerate"
+assert_ok   "drops safetensors"             line_absent "safetensors"
+assert_ok   "drops nvidia-* wheels"         line_absent "nvidia-cublas-cu12"
+assert_ok   "drops cuda-python"             line_absent "cuda-python"
+assert_ok   "drops comfyui-frontend-package" line_absent "comfyui-frontend-package"
+
+# An all-blocked file must produce an empty result, not an error.
+printf 'torch\nnumpy\n' > "$TMP/allblocked.txt"
+sanitize_requirements "$TMP/allblocked.txt" "$TMP/allblocked.out"
+assert_eq "all-blocked file yields no lines" "0" "$(grep -c . "$TMP/allblocked.out")"
+
 finish
