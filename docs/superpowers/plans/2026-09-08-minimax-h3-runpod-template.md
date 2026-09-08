@@ -784,7 +784,13 @@ copy_one() {
     rm -rf "$WORK"
     mkdir -p "$WORK"
 
+    # Every failure path below deletes the local copy before returning. The
+    # sweep at the top of the next copy_one would eventually do it, but only
+    # if there is a next one: a run killed here (pod evicted, OOM, network
+    # drop) would otherwise strand up to 27 GB on the volume until the user
+    # runs the script again. On a 60 GB recon pod that is half the disk.
     if ! hf download "$SOURCE_REPO" "$name" --local-dir "$WORK" >/dev/null; then
+        rm -f "$local_file"
         FAILED+=("download: $name")
         return 1
     fi
@@ -792,6 +798,7 @@ copy_one() {
     got_size="$(stat -c%s "$local_file" 2>/dev/null)"
     if [[ "$got_size" != "$bytes" ]]; then
         log "   ✗ size mismatch: expected $bytes, got ${got_size:-none}"
+        rm -f "$local_file"
         FAILED+=("size: $name")
         return 1
     fi
@@ -802,6 +809,7 @@ copy_one() {
         log "   ✗ sha256 mismatch"
         log "     expected $want_sha"
         log "     got      $got_sha"
+        rm -f "$local_file"
         FAILED+=("sha256: $name")
         return 1
     fi
@@ -809,6 +817,7 @@ copy_one() {
     log "   uploading to $MIRROR_REPO"
     if ! HF_TOKEN="$HF_WRITE_TOKEN" hf upload "$MIRROR_REPO" "$local_file" "$name" \
         --repo-type model >/dev/null; then
+        rm -f "$local_file"
         FAILED+=("upload: $name")
         return 1
     fi
