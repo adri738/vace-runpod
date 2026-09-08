@@ -105,25 +105,46 @@ network_preflight() {
     done
 }
 
-# Descarga los primeros 256 KB de una URL y devuelve 0 si llegaron rápido.
-# Sirve para elegir origen antes de comprometerse a bajar 1.5 GB por un camino
-# que no avanza.
+# Descarga los primeros 256 KB de una URL para decidir si vale la pena bajar el
+# archivo entero. Distingue tres desenlaces, porque se parecen mucho en el log y
+# significan cosas muy distintas:
+#
+#   404  → el archivo no está ahí. La red funciona; el nombre está obsoleto.
+#   0 B  → conecta pero no transfiere. Eso sí es un problema de red.
+#   ok   → adelante.
 #
 # No mira el código de salida de curl: un servidor que ignora el Range devuelve
 # el archivo entero y curl termina en timeout, pero los bytes llegaron. Lo que
 # importa es cuántos bytes se movieron.
 probe_origin() {
-    local url="$1" got
-    got="$(curl --silent --location --ipv4 \
+    local url="$1" out code got
+    out="$(curl --silent --location --ipv4 \
         --connect-timeout 10 --max-time 25 \
         --range 0-262143 -o /dev/null \
-        --write-out '%{size_download}' "$url" 2>/dev/null)"
+        --write-out '%{http_code} %{size_download}' "$url" 2>/dev/null)"
+
+    code="${out%% *}"
+    got="${out##* }"
 
     # Algunas versiones de curl imprimen el tamaño con decimales; nos quedamos
     # con la parte entera para poder compararlo.
     got="${got%%[!0-9]*}"
 
-    [[ "${got:-0}" -ge 65536 ]]
+    case "${code:-000}" in
+        4??|5??)
+            log "      HTTP $code — el servidor responde, pero ese archivo no está."
+            PROBE_REASON="http"
+            return 1
+            ;;
+    esac
+
+    if [[ "${got:-0}" -lt 65536 ]]; then
+        log "      conecta pero no transfiere (${got:-0} bytes en 25 s)."
+        PROBE_REASON="red"
+        return 1
+    fi
+
+    return 0
 }
 
 # Intenta una descarga con curl, y si falla con las otras herramientas que
@@ -162,41 +183,92 @@ try_fetch() {
 
 # ───────────────────────────── Fase 1: Ollama ─────────────────────────────
 
-# El tarball tiene alrededor de 1.5 GB. Un archivo mucho más pequeño casi
-# siempre es una página de error guardada con nombre de tarball.
-verify_tarball() {
-    local tgz="$1" size
-    size="$(stat -c %s "$tgz" 2>/dev/null || echo 0)"
+# Los nombres de los archivos del release cambian: hasta hace poco era
+# `ollama-linux-amd64.tgz` (gzip) y en la v0.33 es `ollama-linux-amd64.tar.zst`
+# (zstd). Una URL escrita a mano en el script devuelve 404 el día que la
+# cambien otra vez, y ese 404 se parece mucho a un problema de red en el log.
+#
+# Por eso preguntamos a la API de GitHub qué archivos existen de verdad, en vez
+# de suponerlo. Solo si la API no contesta caemos a nombres fijos.
+ollama_origins() {
+    local json
 
-    if (( size < 100000000 )); then
-        log "      archivo incompleto ($((size / 1000000)) MB), se descarta."
-        rm -f "$tgz"
-        return 1
+    json="$(curl -fsL --ipv4 --max-time 20 \
+        https://api.github.com/repos/ollama/ollama/releases/latest 2>/dev/null)"
+
+    if [[ -n "${json:-}" ]]; then
+        # Queremos linux-amd64 a secas. Los sabores -rocm, -mlx y -jetpack
+        # llevan sufijo antes de la extensión, así que anclar al punto los
+        # descarta solos.
+        printf '%s\n' "$json" \
+            | grep -o '"browser_download_url": *"[^"]*"' \
+            | sed 's/.*: *"\(.*\)"/\1/' \
+            | grep -E '/ollama-linux-amd64[.](tar[.]zst|tzst|tgz|tar[.]gz)$'
     fi
 
-    if ! tar -tzf "$tgz" >/dev/null 2>&1; then
-        log "      el archivo no es un tar.gz válido, se descarta."
-        rm -f "$tgz"
+    # Reservas por si la API está caída. `releases/latest/download/` resuelve
+    # solo a la última versión, sin necesidad de saber el número.
+    echo "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst"
+    echo "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
+}
+
+# El paquete de Ollama pesa más de 1 GB. Un archivo mucho más pequeño casi
+# siempre es una página de error guardada con nombre de paquete.
+verify_asset() {
+    local f="$1" size
+    size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+
+    if (( size < 10000000 )); then
+        log "      solo llegaron $((size / 1000000)) MB, se descarta."
+        rm -f "$f"
         return 1
     fi
 }
 
-# Los assets de GitHub se sirven desde un dominio distinto al de la página.
-# Resolver la etiqueta por la API nos da una tercera URL que puede salir por
-# otro camino, y de paso confirma si GitHub es alcanzable.
-ollama_origins() {
-    echo "https://ollama.com/download/ollama-linux-amd64.tgz"
-    echo "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
-
-    local tag
-    tag="$(curl -fsL --ipv4 --max-time 20 \
-        https://api.github.com/repos/ollama/ollama/releases/latest 2>/dev/null \
-        | grep -m1 '"tag_name"' \
-        | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-
-    if [[ -n "${tag:-}" ]]; then
-        echo "https://github.com/ollama/ollama/releases/download/${tag}/ollama-linux-amd64.tgz"
+# zstd no viene en todas las imágenes base y ahora hace falta para desempaquetar
+# Ollama.
+ensure_zstd() {
+    if command -v unzstd >/dev/null 2>&1 || command -v zstd >/dev/null 2>&1; then
+        return 0
     fi
+
+    log "   Instalando zstd (el paquete de Ollama ya no es gzip)..."
+
+    if DEBIAN_FRONTEND=noninteractive apt-get update -qq >>"$LOG" 2>&1 \
+        && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd >>"$LOG" 2>&1; then
+        return 0
+    fi
+
+    fail "No se pudo instalar zstd, necesario para desempaquetar Ollama."
+    return 1
+}
+
+# El paquete se extiende sobre /usr y deja el binario en /usr/bin/ollama. Si
+# algún día cambia la estructura, lo buscamos antes de darnos por vencidos.
+extract_ollama() {
+    local f="$1"
+
+    case "$f" in
+        *.tar.zst|*.tzst)
+            ensure_zstd || return 1
+            tar --use-compress-program=unzstd -C /usr -xf "$f" >>"$LOG" 2>&1 || return 1
+            ;;
+        *.tgz|*.tar.gz)
+            tar -C /usr -xzf "$f" >>"$LOG" 2>&1 || return 1
+            ;;
+        *)
+            log "      formato desconocido: ${f##*/}"
+            return 1
+            ;;
+    esac
+
+    if ! command -v ollama >/dev/null 2>&1; then
+        local found
+        found="$(find /usr -maxdepth 4 -type f -name ollama -perm -u+x 2>/dev/null | head -1)"
+        [[ -n "$found" ]] && ln -sf "$found" /usr/bin/ollama
+    fi
+
+    command -v ollama >/dev/null 2>&1
 }
 
 install_ollama() {
@@ -208,57 +280,67 @@ install_ollama() {
     log ""
     log "── Instalando Ollama ──"
 
-    # Tarball oficial en vez del script de instalación: el script crea usuarios
+    # Paquete oficial en vez del script de instalación: el script crea usuarios
     # y unidades de systemd que no existen en un contenedor, y falla de formas
-    # difíciles de diagnosticar. El tarball solo desempaqueta el binario.
+    # difíciles de diagnosticar. El paquete solo trae el binario y sus librerías.
     #
     # Siempre la última versión, nunca la congelada en la imagen: un Ollama
     # antiguo no trae el renderer de Gemma 4 y el modelo responde guiones.
-    local tgz="/tmp/ollama-linux-amd64.tgz"
-    local url round downloaded=false
+    local url round dest asset=""
+    local http_errors=0 net_errors=0
 
     local origins=()
     mapfile -t origins < <(ollama_origins)
-    log "   ${#origins[@]} origen(es) disponibles."
+    log "   ${#origins[@]} origen(es) a probar."
 
     # Dos rondas: un origen puede estar de mal humor un minuto y responder al
     # siguiente. Más de dos es hacer esperar al usuario por nada.
     for round in 1 2; do
         for url in "${origins[@]}"; do
-            log "   [ronda $round] ${url#https://}"
+            log "   [ronda $round] ${url##*/}"
 
+            PROBE_REASON=""
             if ! probe_origin "$url"; then
-                log "      sin respuesta útil en 25 s, siguiente origen."
+                if [[ "$PROBE_REASON" == "http" ]]; then
+                    http_errors=$(( http_errors + 1 ))
+                else
+                    net_errors=$(( net_errors + 1 ))
+                fi
                 continue
             fi
 
             log "      responde. Descargando..."
 
-            if try_fetch "$url" "$tgz" && verify_tarball "$tgz"; then
-                downloaded=true
+            dest="/tmp/${url##*/}"
+            if try_fetch "$url" "$dest" && verify_asset "$dest"; then
+                asset="$dest"
                 break 2
             fi
         done
 
-        (( round == 1 )) && log "   Ningún origen sirvió. Reintentando una vez más..."
+        if (( round == 1 )); then
+            log "   Ningún origen sirvió. Reintentando una vez más..."
+        fi
     done
 
-    if [[ "$downloaded" != "true" ]]; then
-        fail "OLLAMA_SIN_RED: ningún origen entregó el tarball. La salida de red de este pod no alcanza los servidores de Ollama ni GitHub."
+    if [[ -z "$asset" ]]; then
+        # Los dos desenlaces piden acciones opuestas, así que se nombran
+        # distinto: uno se arregla editando el script, el otro cambiando de pod.
+        if (( http_errors > net_errors )); then
+            fail "OLLAMA_404: los servidores responden, pero ninguno tiene ese archivo. El nombre del paquete cambió en el release; hay que actualizar ollama_origins() en el script."
+        else
+            fail "OLLAMA_SIN_RED: los servidores aceptan la conexión pero no transfieren datos. Es la salida de red de este pod."
+        fi
         return 1
     fi
 
-    if ! tar -C /usr -xzf "$tgz" >>"$LOG" 2>&1; then
-        fail "No se pudo desempaquetar el tarball de Ollama. Revisa $LOG."
+    if ! extract_ollama "$asset"; then
+        fail "Se descargó el paquete de Ollama pero no se pudo instalar. Revisa $LOG."
+        rm -f "$asset"
         return 1
     fi
 
-    rm -f "$tgz"
-
-    if ! command -v ollama >/dev/null 2>&1; then
-        fail "Ollama se desempaquetó pero el binario no está en el PATH."
-        return 1
-    fi
+    rm -f "$asset"
 
     log "Ollama instalado: $(ollama --version 2>/dev/null | head -1)"
 }
@@ -419,23 +501,42 @@ summary() {
             log "  • $item"
         done
 
-        # El fallo de red no se arregla con nada dentro del pod, así que la
-        # única respuesta útil es decir exactamente qué hacer.
+        # Cada fallo pide una acción distinta, y confundirlos cuesta horas: un
+        # 404 se arregla en el script, un corte de red solo cambiando de pod.
+        if [[ " ${FAILED[*]} " == *OLLAMA_404* ]]; then
+            log ""
+            log " ─────────────────────────────────────────────"
+            log " La red de este pod está bien. Lo que falla es"
+            log " el nombre del archivo: Ollama lo cambió en su"
+            log " release y las URL del script apuntan a algo"
+            log " que ya no existe."
+            log ""
+            log " Qué hacer:"
+            log "   1. Mira los nombres reales:"
+            log "      curl -s https://api.github.com/repos/ollama/ollama/releases/latest | grep browser_download_url"
+            log "   2. Ajusta el filtro de ollama_origins() en"
+            log "      provision_ollama.sh y sube el cambio."
+            log ""
+            log " NO cambies de región: no serviría de nada."
+            log " ─────────────────────────────────────────────"
+        fi
+
         if [[ " ${FAILED[*]} " == *OLLAMA_SIN_RED* ]]; then
             log ""
             log " ─────────────────────────────────────────────"
-            log " Esto NO se arregla desde dentro del pod."
-            log " Ningún origen entregó el binario, aunque PyPI"
-            log " sí responda: es la salida de red de esta"
-            log " máquina concreta."
+            log " Los servidores aceptan la conexión pero no"
+            log " mandan datos. Eso NO se arregla desde dentro"
+            log " del pod: es la salida de red de esta máquina."
             log ""
-            log " Qué hacer:"
-            log "   1. Termina este pod (Terminate, no Stop)."
-            log "   2. Despliega otro en un datacenter distinto."
-            log "   3. En el minuto uno, comprueba con:"
-            log "      tail -f $LOG"
-            log "      Si vuelve a salir OLLAMA_SIN_RED, cambia"
-            log "      otra vez de región sin esperar más."
+            log " Antes de rendirte, comprueba que no sea algo"
+            log " general del pod:"
+            log "   curl -o /dev/null -s -w '%{speed_download} B/s\\n' \\"
+            log "     'https://speed.cloudflare.com/__down?bytes=10000000'"
+            log ""
+            log " Si esa prueba baja rápido, el problema es solo"
+            log " con GitHub y merece un reintento. Si también"
+            log " se queda a 0, termina el pod y despliega en"
+            log " otro datacenter."
             log " ─────────────────────────────────────────────"
         fi
 
