@@ -293,8 +293,13 @@ assert_fail "missing file"                       safetensors_ok "$TMP/nope.safet
 # guards could be silently turned into no-ops and the suite would stay
 # green. Each passes its own file size to safetensors_ok so that the size
 # check cannot be what does the rejecting.
+#
+# Each fixture must violate ONLY the guard it targets. That is why the
+# broken-brace header below keeps "data_offsets" intact: a header of plain
+# filler would be rejected by the data_offsets grep instead, leaving the
+# brace guard untested and a no-op regression in it invisible.
 
-header_bad='XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+header_bad='X"t":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}'
 : > "$TMP/nobrace.safetensors"
 write_u64le "${#header_bad}" "$TMP/nobrace.safetensors"
 printf '%s' "$header_bad" >> "$TMP/nobrace.safetensors"
