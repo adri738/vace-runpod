@@ -84,10 +84,26 @@ install_ollama() {
     # Siempre la última versión, nunca la congelada en la imagen: un Ollama
     # antiguo no trae el renderer de Gemma 4 y el modelo responde guiones.
     local tgz="/tmp/ollama-linux-amd64.tgz"
+    local url downloaded=false
 
-    if ! curl -fL --retry 3 https://ollama.com/download/ollama-linux-amd64.tgz \
-        -o "$tgz" >>"$LOG" 2>&1; then
-        fail "No se pudo descargar el tarball de Ollama. Revisa $LOG."
+    # Dos orígenes: algunos datacenters de RunPod no alcanzan ollama.com aunque
+    # el resto de la red funcione. GitHub sirve el mismo artefacto.
+    for url in \
+        "https://ollama.com/download/ollama-linux-amd64.tgz" \
+        "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
+    do
+        log "   ↓ intentando desde ${url%%/download/*}..."
+
+        if curl -fL --retry 2 --connect-timeout 15 "$url" -o "$tgz" >>"$LOG" 2>&1; then
+            downloaded=true
+            break
+        fi
+
+        log "   ✗ sin suerte con ese origen."
+    done
+
+    if [[ "$downloaded" != "true" ]]; then
+        fail "No se pudo descargar Ollama desde ninguno de los dos orígenes. Revisa $LOG."
         return 1
     fi
 
