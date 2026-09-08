@@ -203,7 +203,7 @@ scripts.
 |---|---|
 | Container Image | `runpod/comfyui:1.4.7-cuda13.0` (pinned, not the floating `cuda13.0` tag) |
 | Container Disk | 25 GB |
-| Volume Disk | 120 GB |
+| Volume Disk | 150 GB |
 | Volume Mount Path | `/workspace` |
 | Expose HTTP Ports | `8188` (ComfyUI), `8888` (JupyterLab) |
 | Expose TCP Ports | `22` |
@@ -215,6 +215,12 @@ Container Start Command (one line):
 ```
 {"entrypoint": ["bash", "-c", "nohup bash -c 'i=0; while [ ! -d /workspace/runpod-slim/ComfyUI/custom_nodes ] && [ $i -lt 180 ]; do sleep 5; i=$((i+1)); done; curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_minimax.sh -o /workspace/provision_minimax.sh; bash /workspace/provision_minimax.sh --boot' > /workspace/provision-boot.log 2>&1 & exec /start.sh"]}
 ```
+
+Volume sizing: 77.46 GB of models plus roughly 15 GB of ComfyUI, its virtualenv and the 13
+node packs leaves ~55 GB for generated video. Since pods are always terminated, this disk
+is only billed while a pod runs — about $0.02/hour against ~$0.74/hour for the GPU — so the
+extra headroom over a tighter 120 GB costs nothing meaningful and avoids running out of
+space mid-session.
 
 The image version is pinned for the same reason node commits are pinned: a RunPod update
 should never be able to break a working pod unannounced. `MINIMAX_INSTRUCTIONS.md`
