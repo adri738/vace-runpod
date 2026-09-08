@@ -235,9 +235,14 @@ loads them in turn, so peak VRAM is the larger of the two plus video latents.
 | 48 GB | L40S, A6000, RTX 6000 Ada | Sweet spot. Real headroom for long video and inpainting. |
 | 80-96 GB | H100, A100 80GB, RTX PRO 6000 | Comfortable, materially more expensive per hour. |
 
-Also require **64 GB system RAM minimum** — ComfyUI offloads inactive models to host RAM,
-and on RunPod the RAM allocation is tied to the chosen GPU, so it must be checked at
-deploy time.
+**Chosen by the user: RTX 6000 Ada (48 GB).** The 25.28 GB text encoder fits entirely in
+VRAM, so there is no per-prompt offload to host RAM — the failure mode that rules out
+24 GB cards.
+
+System RAM is the secondary constraint, since ComfyUI parks inactive models there. RunPod's
+RTX 6000 Ada configurations typically ship under 64 GB of host RAM; that should still be
+fine given the models live in VRAM, but if long-video runs start swapping, host RAM is the
+first thing to check. Verify the actual allocation at deploy time.
 
 ## Error handling
 
