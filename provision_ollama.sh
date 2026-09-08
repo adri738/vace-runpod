@@ -27,6 +27,7 @@ export OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}"
 export DATA_DIR="${DATA_DIR:-$WORKSPACE/open-webui}"
 
 WEBUI_PORT="${WEBUI_PORT:-8080}"
+JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 
 # Modelos a descargar. Edita esta lista para probar otros.
 MODELS=(
@@ -184,7 +185,7 @@ start_webui() {
     mkdir -p "$DATA_DIR"
 
     log "Arrancando Open WebUI en el puerto ${WEBUI_PORT} (datos en $DATA_DIR)..."
-    nohup open-webui serve --host 0.0.0.0 --port "$WEBUI_PORT" >>"$LOG" 2>&1 </dev/null &
+    nohup open-webui serve --host 0.0.0.0 --port "$WEBUI_PORT" >>"$WORKSPACE/open-webui.log" 2>&1 </dev/null &
 
     local i
     for i in $(seq 1 180); do
@@ -197,6 +198,42 @@ start_webui() {
 
     fail "Open WebUI no respondió en 180 segundos. Revisa $LOG."
     return 1
+}
+
+# ────────────────────────────── Fase 4: Jupyter ──────────────────────────
+
+# El Container Start Command sustituye al arranque propio de la imagen, que es
+# quien lanza JupyterLab. Si no lo levantamos aquí, el puerto 8888 queda
+# expuesto pero sin nada detrás.
+start_jupyter() {
+    if curl -sf "http://127.0.0.1:${JUPYTER_PORT}/api" >/dev/null 2>&1; then
+        log "JupyterLab ya está sirviendo."
+        return 0
+    fi
+
+    if ! command -v jupyter >/dev/null 2>&1; then
+        log "[SKIP] JupyterLab no está en la imagen; usa el terminal web de RunPod."
+        return 0
+    fi
+
+    log "Arrancando JupyterLab en el puerto ${JUPYTER_PORT}..."
+
+    nohup jupyter lab \
+        --ip=0.0.0.0 --port="$JUPYTER_PORT" --allow-root --no-browser \
+        --ServerApp.token='' --ServerApp.password='' \
+        --ServerApp.allow_origin='*' --notebook-dir=/workspace \
+        >>"$WORKSPACE/jupyter.log" 2>&1 </dev/null &
+
+    local i
+    for i in $(seq 1 60); do
+        if curl -sf "http://127.0.0.1:${JUPYTER_PORT}/api" >/dev/null 2>&1; then
+            log "JupyterLab listo."
+            return 0
+        fi
+        sleep 1
+    done
+
+    fail "JupyterLab no respondió en 60 segundos. Revisa $WORKSPACE/jupyter.log."
 }
 
 # ──────────────────────────────── Resumen ────────────────────────────────
@@ -237,6 +274,7 @@ main() {
 
     install_ollama && start_ollama && pull_models
     install_webui && start_webui
+    start_jupyter
 
     summary
     keep_alive
