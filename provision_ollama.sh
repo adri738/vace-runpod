@@ -75,11 +75,30 @@ install_ollama() {
 
     log "Instalando Ollama (última versión)..."
 
-    # Siempre el instalador oficial, nunca una versión congelada en la imagen.
-    # Es lo que garantiza soporte de los modelos recientes: un Ollama antiguo
-    # no trae el renderer de Gemma 4 y el modelo responde guiones.
-    if ! curl -fsSL https://ollama.com/install.sh | sh >>"$LOG" 2>&1; then
-        fail "Falló la instalación de Ollama."
+    # Tarball oficial en vez del script de instalación: el script crea usuarios
+    # y unidades de systemd que no existen en un contenedor, y falla de formas
+    # difíciles de diagnosticar. El tarball es la vía documentada para
+    # instalaciones manuales y solo desempaqueta el binario.
+    #
+    # Siempre la última versión, nunca la congelada en la imagen: un Ollama
+    # antiguo no trae el renderer de Gemma 4 y el modelo responde guiones.
+    local tgz="/tmp/ollama-linux-amd64.tgz"
+
+    if ! curl -fL --retry 3 https://ollama.com/download/ollama-linux-amd64.tgz \
+        -o "$tgz" >>"$LOG" 2>&1; then
+        fail "No se pudo descargar el tarball de Ollama. Revisa $LOG."
+        return 1
+    fi
+
+    if ! tar -C /usr -xzf "$tgz" >>"$LOG" 2>&1; then
+        fail "No se pudo desempaquetar el tarball de Ollama. Revisa $LOG."
+        return 1
+    fi
+
+    rm -f "$tgz"
+
+    if ! command -v ollama >/dev/null 2>&1; then
+        fail "Ollama se desempaquetó pero el binario no está en el PATH."
         return 1
     fi
 
@@ -220,6 +239,23 @@ main() {
     install_webui && start_webui
 
     summary
+    keep_alive
+}
+
+# El Container Start Command de RunPod es el proceso principal del contenedor:
+# si termina, RunPod reinicia el pod. Los servicios corren en segundo plano con
+# nohup, así que hay que bloquear aquí para que el contenedor siga vivo.
+#
+# Al ejecutarlo a mano desde una terminal, pasa KEEP_ALIVE=false para que
+# devuelva el prompt.
+keep_alive() {
+    if [[ "${KEEP_ALIVE:-true}" != "true" ]]; then
+        return 0
+    fi
+
+    log ""
+    log "Contenedor activo. El log de aquí en adelante es el de los servicios."
+    tail -f "$LOG"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
