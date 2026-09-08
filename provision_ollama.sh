@@ -30,10 +30,17 @@ export DATA_DIR="${DATA_DIR:-$WORKSPACE/open-webui}"
 WEBUI_PORT="${WEBUI_PORT:-8080}"
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 
-# Modelos a descargar. Edita esta lista para probar otros.
+# Modelos a descargar. Editar con cuidado: los nombres del registro de Ollama no
+# se parecen a los de HuggingFace, y un nombre inventado falla igual que un fallo
+# de red. Antes de poner uno aquí, compruébalo:
+#
+#   curl -sf https://ollama.com/<usuario>/<modelo> >/dev/null && echo existe
+#
+# huihui_ai es el publicador de abliteraciones con más recorrido del registro
+# (1.1M descargas en el Gemma). Los dos entran de sobra en 48 GB de VRAM.
 MODELS=(
-    "juilpark/gemma-4-31B-it-uncensored-heretic"
-    "dolphin3.0-mistral-24b"
+    "huihui_ai/gemma-4-abliterated:31b"     # 20 GB — multimodal, lee imágenes
+    "huihui_ai/Qwen3.8-abliterated:27b"     # 18 GB — solo texto
 )
 
 FAILED=()
