@@ -125,10 +125,24 @@ copy_one() {
     log "   ✓ $name mirrored"
 }
 
+# The workflow filenames live in a constant rather than inline in the loop, so
+# a test can check this list against WORKFLOW_FILES in provision_minimax.sh. A
+# name that goes stale in only one of the two scripts is the same drift the
+# model manifest test already guards against — and it has happened once.
+MIRROR_WORKFLOW_FILES='
+MINIMAX_H3_ULTRA_WORKFLOW-V3.json
+MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json
+'
+
+mirror_workflow_lines() {
+    printf '%s\n' "$MIRROR_WORKFLOW_FILES" | grep -vE '^[[:space:]]*(#|$)'
+}
+
 upload_workflows() {
     local f
     log "──── workflow JSONs ────"
-    for f in MINIMAX_H3_ULTRA_WORKFLOW-V3.json MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json; do
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
         if [[ ! -f "$f" ]]; then
             log " [SKIP] $f not present in $(pwd) — upload it later from your PC"
             continue
@@ -139,7 +153,7 @@ upload_workflows() {
         else
             FAILED+=("upload: $f")
         fi
-    done
+    done <<< "$(mirror_workflow_lines)"
 }
 
 main() {

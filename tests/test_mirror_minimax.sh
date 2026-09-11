@@ -21,4 +21,12 @@ assert_eq "same sizes" \
 assert_eq "every sha256 is 64 hex characters" "0" \
     "$(mirror_manifest_lines | awk -F'|' 'length($3) != 64 || $3 !~ /^[0-9a-f]+$/' | grep -c .)"
 
+# The workflow filenames are duplicated between the two scripts for the same
+# reason the manifest is: each script is fetched standalone. This assertion is
+# what keeps the duplicate honest. One of these names has already gone stale
+# once, so it is not a hypothetical.
+assert_eq "same workflow filenames" \
+    "$(workflow_lines | sort | tr '\n' ' ')" \
+    "$(mirror_workflow_lines | sort | tr '\n' ' ')"
+
 finish
