@@ -114,9 +114,12 @@ Sizes measured 2026-09-08 via HTTP HEAD against `Aitrepreneur/FLX`.
 | `taeh3.safetensors` | 0.01 GB | `vae_approx/` |
 | **Total** | **77.46 GB** | |
 
-Both workflow JSONs (normal and turbo) reference the same node types and the same 9
-model filenames; `taeh3.safetensors` is picked up automatically by ComfyUI for latent
-previews.
+The two workflow JSONs the user keeps are `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` and
+`MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json`. (An earlier turbo variant was also
+in scope; the user has since discarded it. The turbo LoRA above is still mirrored —
+it is selectable from within the main workflow and is not tied to that file.) Both
+reference the same node types and the same 9 model filenames; `taeh3.safetensors` is
+picked up automatically by ComfyUI for latent previews.
 
 ### Node packs
 
@@ -269,8 +272,9 @@ Against a real pod, in this order:
    ComfyUI's list.
 3. Idempotence: re-run the script; it should skip everything and finish in under a minute.
 4. Resume: interrupt a download mid-file, re-run, confirm it completes without corruption.
-5. Real generation: load the turbo workflow and render a short clip end to end. This is the
-   only test that actually counts.
+5. Real generation: load `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` and render a short clip end to
+   end, with `RF PATCH SAGE` enabled and `RF SPEEDUP` bypassed. This is the only test that
+   actually counts.
 
 ## Open questions to resolve during implementation
 

@@ -628,7 +628,7 @@ taeh3.safetensors|vae_approx|9791388
 
 WORKFLOW_FILES='
 MINIMAX_H3_ULTRA_WORKFLOW-V3.json
-MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json
+MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json
 '
 
 manifest_lines() {
@@ -688,7 +688,7 @@ question from the filename alone:
 
 ```bash
 git check-ignore -v MINIMAX_H3_ULTRA_WORKFLOW-V3.json
-git check-ignore -v MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json
+git check-ignore -v MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json
 ```
 
 Expected: both print the `.gitignore` line number and the matching pattern, and exit 0. No
@@ -826,10 +826,24 @@ copy_one() {
     log "   ✓ $name mirrored"
 }
 
+# The workflow filenames live in a constant rather than inline in the loop, so
+# a test can check this list against WORKFLOW_FILES in provision_minimax.sh. A
+# name that goes stale in only one of the two scripts is the same drift the
+# model manifest test already guards against — and it has happened once.
+MIRROR_WORKFLOW_FILES='
+MINIMAX_H3_ULTRA_WORKFLOW-V3.json
+MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json
+'
+
+mirror_workflow_lines() {
+    printf '%s\n' "$MIRROR_WORKFLOW_FILES" | grep -vE '^[[:space:]]*(#|$)'
+}
+
 upload_workflows() {
     local f
     log "──── workflow JSONs ────"
-    for f in MINIMAX_H3_ULTRA_WORKFLOW-V3.json MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json; do
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
         if [[ ! -f "$f" ]]; then
             log " [SKIP] $f not present in $(pwd) — upload it later from your PC"
             continue
@@ -840,7 +854,7 @@ upload_workflows() {
         else
             FAILED+=("upload: $f")
         fi
-    done
+    done <<< "$(mirror_workflow_lines)"
 }
 
 main() {
@@ -924,6 +938,14 @@ assert_eq "same sizes" \
 
 assert_eq "every sha256 is 64 hex characters" "0" \
     "$(mirror_manifest_lines | awk -F'|' 'length($3) != 64 || $3 !~ /^[0-9a-f]+$/' | grep -c .)"
+
+# The workflow filenames are duplicated between the two scripts for the same
+# reason the manifest is: each script is fetched standalone. This assertion is
+# what keeps the duplicate honest. One of these names has already gone stale
+# once, so it is not a hypothetical.
+assert_eq "same workflow filenames" \
+    "$(workflow_lines | sort | tr '\n' ' ')" \
+    "$(mirror_workflow_lines | sort | tr '\n' ' ')"
 
 finish
 ```
@@ -1868,7 +1890,12 @@ Open ComfyUI on port 8188, load `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` from the wor
 
 - [ ] **Step 8: Generate a real video**
 
-Load `MINIMAX_H3_ULTRA_TURBO_WORKFLOW-V3.json`, use a short duration, and run it end to end. This is the only check that actually proves the template works.
+Load `MINIMAX_H3_ULTRA_WORKFLOW-V3.json`, use a short duration, and run it end to end. This is the only check that actually proves the template works.
+
+Two workflow toggles must be set correctly or the run proves the wrong thing, per the user's own runbook:
+
+- **`RF PATCH SAGE` → enabled.** SageAttention must be activated by exactly one route. `provision_minimax.sh` does not pass `--use-sage-attention`, so the workflow group is that route. Confirm first with `cat /workspace/runpod-slim/comfyui_args.txt`; if the flag turns out to be there after all, bypass the group instead.
+- **`RF SPEEDUP` (Spectrum) → bypassed.** It trades visible quality for speed, and the runbook forbids combining it with the turbo LoRA. A validation run should measure the configuration actually used for final output.
 
 Watch VRAM while it runs, in a second terminal:
 
