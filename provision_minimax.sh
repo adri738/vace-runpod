@@ -15,7 +15,7 @@
 set -uo pipefail
 
 COMFY_ROOT="${COMFY_ROOT:-/workspace/runpod-slim/ComfyUI}"
-MIRROR_REPO="${MINIMAX_HF_REPO:-adri738/minimax-h3-ultra-v3}"
+MIRROR_REPO="${MINIMAX_HF_REPO:-adri73782/minimax-h3-ultra-v3}"
 LOG="${MINIMAX_LOG:-/workspace/provision_minimax.log}"
 STAGING="${MINIMAX_STAGING:-/workspace/.minimax_staging}"
 MODEL_PARALLEL="${MINIMAX_PARALLEL:-3}"

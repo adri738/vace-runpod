@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-MIRROR_REPO="${MINIMAX_HF_REPO:-adri738/minimax-h3-ultra-v3}"
+MIRROR_REPO="${MINIMAX_HF_REPO:-adri73782/minimax-h3-ultra-v3}"
 WORK="${MINIMAX_MIRROR_WORK:-/workspace/.minimax_mirror}"
 
 FAILED=()

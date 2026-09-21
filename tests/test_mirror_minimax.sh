@@ -102,4 +102,19 @@ assert_eq "workflows are not uploaded after the interrupt" "0" \
 assert_eq "the stop is announced" "1" \
     "$(grep -c 'interrupted' "$TMP/out.log")"
 
+echo "-- default mirror repo --"
+
+# The mirror lives on a dedicated HuggingFace account, adri73782 — not the
+# GitHub name adri738 the first draft assumed. Each script carries the
+# default on its own, since each is fetched standalone, so both are pinned
+# here to the same value. Sourced in a subshell with MINIMAX_HF_REPO unset
+# so that the default, not an inherited override, is what gets read.
+default_repo_of() { ( unset MINIMAX_HF_REPO; source "$1"; printf '%s' "$MIRROR_REPO" ); }
+
+assert_eq "provisioning defaults to the dedicated mirror account" \
+    "adri73782/minimax-h3-ultra-v3" "$(default_repo_of provision_minimax.sh)"
+
+assert_eq "mirror defaults to the dedicated mirror account" \
+    "adri73782/minimax-h3-ultra-v3" "$(default_repo_of mirror_minimax.sh)"
+
 finish
