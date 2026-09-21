@@ -388,6 +388,9 @@ phase2_node_packs() {
                 FAILED+=("node clone: $dir")
                 continue
             fi
+            # A fresh clone has already replaced the pack on disk, even if
+            # the checkout below then fails — so ComfyUI must restart.
+            NODES_CHANGED=1
         fi
 
         git -C "$target" fetch --depth 1 origin "$sha" >/dev/null 2>&1 \
