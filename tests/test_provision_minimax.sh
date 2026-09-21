@@ -234,4 +234,39 @@ assert_fail "pt: truncated download rejected" model_ok "$TMP/cut.pt" 80
 
 assert_fail "pth: missing file rejected"      model_ok "$TMP/absent.pth" 80
 
+echo "-- node pins --"
+
+pins() { grep -vE '^[[:space:]]*(#|$)' docs/minimax-node-pins.txt; }
+
+assert_eq "15 pinned packs" "15" "$(pins | grep -c .)"
+
+assert_eq "every pin has four fields" "0" \
+    "$(pins | awk -F'|' 'NF != 4' | grep -c .)"
+
+assert_eq "13 base packs" "13" "$(pins | awk -F'|' '$4 == "base"' | grep -c .)"
+
+assert_eq "2 controlnet packs" "2" "$(pins | awk -F'|' '$4 == "controlnet"' | grep -c .)"
+
+assert_eq "ten packs are adri738 forks" "10" \
+    "$(pins | grep -c '|https://github.com/adri738/')"
+
+assert_eq "FunControl is the user's fork" \
+    "ComfyUI-H3-FunControl|https://github.com/adri738/ComfyUI-H3-FunControl.git" \
+    "$(pins | awk -F'|' '$1 == "ComfyUI-H3-FunControl" {print $1 "|" $2}')"
+
+assert_eq "controlnet_aux stays on upstream" \
+    "https://github.com/Fannovel16/comfyui_controlnet_aux.git" \
+    "$(pins | awk -F'|' '$1 == "comfyui_controlnet_aux" {print $2}')"
+
+# The preprocessor models are placed inside a node pack's own directory. If
+# that directory name and the pack's pinned directory ever disagree, the
+# files land where nothing looks for them and controlnet_aux quietly
+# downloads its own copies instead — every single session.
+assert_eq "every custom_nodes destination is a pinned controlnet pack" "0" \
+    "$(manifest_lines | awk -F'|' '$2 ~ /^custom_nodes\// {split($2, p, "/"); print p[2]}' \
+        | sort -u \
+        | while read -r d; do
+              [ "$(pins | awk -F'|' -v d="$d" '$1 == d {print $4}')" = controlnet ] || echo "$d"
+          done | grep -c .)"
+
 finish

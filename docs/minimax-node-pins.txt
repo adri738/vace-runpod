@@ -1,14 +1,16 @@
-# dir|clone_url|commit — generated 2026-09-08. Regenerate to update pins.
-ComfyUI-Manager|https://github.com/ltdrdata/ComfyUI-Manager.git|f82970b7cb63ad44928308f980a1d38fda103cbb
-rgthree-comfy|https://github.com/rgthree/rgthree-comfy.git|2c5342a8cb0eaecaabf61435a5f37dd594c510ba
-ComfyUI-KJNodes|https://github.com/kijai/ComfyUI-KJNodes.git|c9869eade9920a1b949de07c4a197156006bcceb
-ComfyUI-VideoHelperSuite|https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git|4d907bee61e92c2e65af3bd6383a4e4d356126d1
-ComfyUI-Spectrum-MiniMax-H3|https://github.com/adri738/ComfyUI-Spectrum-MiniMax-H3.git|a360f64fbfa54681ded100a64ded86a5713ddf17
-ComfyUI-MiniMaxH3-Director|https://github.com/adri738/ComfyUI-MiniMaxH3-Director.git|84863236288ca387c291acffdbfee5b77d1a77a5
-ComfyUI-Fantastic-MiniMaxH3-PromptBuilder|https://github.com/adri738/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder.git|06fef6cd8767e2726c9250d6d67843859d58568c
-ComfyUi-Scale-Image-to-Total-Pixels-Advanced|https://github.com/adri738/ComfyUi-Scale-Image-to-Total-Pixels-Advanced.git|79e831097bb7a76ade3a28359300e62332086c42
-ComfyUI-MiniMaxH3-T1-Latent|https://github.com/adri738/ComfyUI-MiniMaxH3-T1-Latent.git|6f55b2932713029b1547f3def8ae4e5c60f4e6ee
-ComfyUI-H3-Motion-Context-MultiRef|https://github.com/adri738/ComfyUI-H3-Motion-Context-MultiRef-V3.git|d299ea552d49213e25a337f6e2f24fbf64e78f40
-MaskVidExperiments|https://github.com/adri738/MaskVidExperiments.git|e5f5a28c1d82e343cc43f6ac59529ab80a7e0ae2
-ComfyUI-NKD-Basic-Tools|https://github.com/adri738/ComfyUI-NKD-Basic-Tools.git|86b9ae1b2217a5c19ce3329a66f51db9ddbb60bf
-Comfyui_Minimax_h3_latent_Upscaler|https://github.com/adri738/Comfyui_Minimax_h3_latent_Upscaler.git|d7c01b9011f2e8439493f6c02c29995a27df276f
+# dir|clone_url|commit|group - base pins 2026-09-08, controlnet pins 2026-09-21. Change one pin at a time, deliberately; never regenerate the whole file.
+ComfyUI-Manager|https://github.com/ltdrdata/ComfyUI-Manager.git|f82970b7cb63ad44928308f980a1d38fda103cbb|base
+rgthree-comfy|https://github.com/rgthree/rgthree-comfy.git|2c5342a8cb0eaecaabf61435a5f37dd594c510ba|base
+ComfyUI-KJNodes|https://github.com/kijai/ComfyUI-KJNodes.git|c9869eade9920a1b949de07c4a197156006bcceb|base
+ComfyUI-VideoHelperSuite|https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git|4d907bee61e92c2e65af3bd6383a4e4d356126d1|base
+ComfyUI-Spectrum-MiniMax-H3|https://github.com/adri738/ComfyUI-Spectrum-MiniMax-H3.git|a360f64fbfa54681ded100a64ded86a5713ddf17|base
+ComfyUI-MiniMaxH3-Director|https://github.com/adri738/ComfyUI-MiniMaxH3-Director.git|84863236288ca387c291acffdbfee5b77d1a77a5|base
+ComfyUI-Fantastic-MiniMaxH3-PromptBuilder|https://github.com/adri738/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder.git|06fef6cd8767e2726c9250d6d67843859d58568c|base
+ComfyUi-Scale-Image-to-Total-Pixels-Advanced|https://github.com/adri738/ComfyUi-Scale-Image-to-Total-Pixels-Advanced.git|79e831097bb7a76ade3a28359300e62332086c42|base
+ComfyUI-MiniMaxH3-T1-Latent|https://github.com/adri738/ComfyUI-MiniMaxH3-T1-Latent.git|6f55b2932713029b1547f3def8ae4e5c60f4e6ee|base
+ComfyUI-H3-Motion-Context-MultiRef|https://github.com/adri738/ComfyUI-H3-Motion-Context-MultiRef-V3.git|d299ea552d49213e25a337f6e2f24fbf64e78f40|base
+MaskVidExperiments|https://github.com/adri738/MaskVidExperiments.git|e5f5a28c1d82e343cc43f6ac59529ab80a7e0ae2|base
+ComfyUI-NKD-Basic-Tools|https://github.com/adri738/ComfyUI-NKD-Basic-Tools.git|86b9ae1b2217a5c19ce3329a66f51db9ddbb60bf|base
+Comfyui_Minimax_h3_latent_Upscaler|https://github.com/adri738/Comfyui_Minimax_h3_latent_Upscaler.git|d7c01b9011f2e8439493f6c02c29995a27df276f|base
+ComfyUI-H3-FunControl|https://github.com/adri738/ComfyUI-H3-FunControl.git|d2a3faa7e29f45b8cb03685368c1243f08143910|controlnet
+comfyui_controlnet_aux|https://github.com/Fannovel16/comfyui_controlnet_aux.git|59b1fc411ede8623b2997855b8018f0b3b6cf49f|controlnet
