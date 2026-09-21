@@ -19,6 +19,7 @@ MIRROR_REPO="${MINIMAX_HF_REPO:-adri73782/minimax-h3-ultra-v3}"
 LOG="${MINIMAX_LOG:-/workspace/provision_minimax.log}"
 STAGING="${MINIMAX_STAGING:-/workspace/.minimax_staging}"
 MODEL_PARALLEL="${MINIMAX_PARALLEL:-3}"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 FAILED=()
 
@@ -165,6 +166,280 @@ in_active_group() {
 
 active_manifest_lines() { manifest_lines | in_active_group; }
 active_workflow_lines() { workflow_lines | in_active_group; }
+
+# Custom-node packs: directory|clone url|pinned commit|group.
+#
+# Kept identical to docs/minimax-node-pins.txt, which is the reviewable
+# source of truth; tests/test_provision_minimax.sh fails if they drift.
+# Ten of these point at forks under adri738 so a deleted upstream cannot
+# break the template. Pinning protects against breaking changes; forking
+# protects against deletion. Both are needed. The group field works as it
+# does for models: "controlnet" packs install only when MINIMAX_CONTROLNET
+# is on.
+NODE_PACKS='
+ComfyUI-Manager|https://github.com/ltdrdata/ComfyUI-Manager.git|f82970b7cb63ad44928308f980a1d38fda103cbb|base
+rgthree-comfy|https://github.com/rgthree/rgthree-comfy.git|2c5342a8cb0eaecaabf61435a5f37dd594c510ba|base
+ComfyUI-KJNodes|https://github.com/kijai/ComfyUI-KJNodes.git|c9869eade9920a1b949de07c4a197156006bcceb|base
+ComfyUI-VideoHelperSuite|https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git|4d907bee61e92c2e65af3bd6383a4e4d356126d1|base
+ComfyUI-Spectrum-MiniMax-H3|https://github.com/adri738/ComfyUI-Spectrum-MiniMax-H3.git|a360f64fbfa54681ded100a64ded86a5713ddf17|base
+ComfyUI-MiniMaxH3-Director|https://github.com/adri738/ComfyUI-MiniMaxH3-Director.git|84863236288ca387c291acffdbfee5b77d1a77a5|base
+ComfyUI-Fantastic-MiniMaxH3-PromptBuilder|https://github.com/adri738/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder.git|06fef6cd8767e2726c9250d6d67843859d58568c|base
+ComfyUi-Scale-Image-to-Total-Pixels-Advanced|https://github.com/adri738/ComfyUi-Scale-Image-to-Total-Pixels-Advanced.git|79e831097bb7a76ade3a28359300e62332086c42|base
+ComfyUI-MiniMaxH3-T1-Latent|https://github.com/adri738/ComfyUI-MiniMaxH3-T1-Latent.git|6f55b2932713029b1547f3def8ae4e5c60f4e6ee|base
+ComfyUI-H3-Motion-Context-MultiRef|https://github.com/adri738/ComfyUI-H3-Motion-Context-MultiRef-V3.git|d299ea552d49213e25a337f6e2f24fbf64e78f40|base
+MaskVidExperiments|https://github.com/adri738/MaskVidExperiments.git|e5f5a28c1d82e343cc43f6ac59529ab80a7e0ae2|base
+ComfyUI-NKD-Basic-Tools|https://github.com/adri738/ComfyUI-NKD-Basic-Tools.git|86b9ae1b2217a5c19ce3329a66f51db9ddbb60bf|base
+Comfyui_Minimax_h3_latent_Upscaler|https://github.com/adri738/Comfyui_Minimax_h3_latent_Upscaler.git|d7c01b9011f2e8439493f6c02c29995a27df276f|base
+ComfyUI-H3-FunControl|https://github.com/adri738/ComfyUI-H3-FunControl.git|d2a3faa7e29f45b8cb03685368c1243f08143910|controlnet
+comfyui_controlnet_aux|https://github.com/Fannovel16/comfyui_controlnet_aux.git|59b1fc411ede8623b2997855b8018f0b3b6cf49f|controlnet
+'
+
+node_pack_lines() {
+    printf '%s\n' "$NODE_PACKS" | grep -vE '^[[:space:]]*(#|$)'
+}
+
+active_node_pack_lines() { node_pack_lines | in_active_group; }
+
+setup_logging() {
+    mkdir -p "$(dirname "$LOG")" "$STAGING"
+    exec > >(tee -a "$LOG") 2>&1
+}
+
+# find_comfy_python — prints ComfyUI's own interpreter, or fails.
+#
+# On runpod/comfyui:1.4.7-cuda13.0 the only venv is .venv-cu128 — a legacy
+# name over a CUDA 13 torch (reconnaissance, 2026-09-21). There is no venv/
+# or .venv/, so those alone would miss it. And there is deliberately no
+# fallback to the system python3: pip-installing node requirements and
+# SageAttention into the wrong interpreter would "succeed" silently and
+# leave ComfyUI without them. Failing loudly is the safer outcome.
+find_comfy_python() {
+    local candidate
+    for candidate in \
+        "${COMFY_PYTHON:-}" \
+        "$COMFY_ROOT/.venv-cu130/bin/python" \
+        "$COMFY_ROOT/.venv-cu128/bin/python" \
+        "$COMFY_ROOT"/.venv*/bin/python \
+        "$COMFY_ROOT/venv/bin/python" \
+        "$COMFY_ROOT/.venv/bin/python"; do
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+phase0_wait_for_comfyui() {
+    local waited=0
+    local limit="${COMFY_WAIT_SECONDS:-1800}"
+
+    log ""
+    log "──── phase 0: waiting for ComfyUI ────"
+
+    while [[ ! -d "$COMFY_ROOT/custom_nodes" ]]; do
+        if (( waited >= limit )); then
+            log "❌ ComfyUI never appeared at $COMFY_ROOT after ${limit}s"
+            FAILED+=("phase 0: ComfyUI not found at $COMFY_ROOT")
+            return 1
+        fi
+        sleep 10
+        waited=$(( waited + 10 ))
+    done
+
+    if ! PYTHON="$(find_comfy_python)"; then
+        log "❌ no ComfyUI virtualenv under $COMFY_ROOT — refusing to fall back to the system python"
+        FAILED+=("phase 0: ComfyUI python not found")
+        return 1
+    fi
+    log "ComfyUI root : $COMFY_ROOT (ready after ${waited}s)"
+    log "ComfyUI python: $PYTHON"
+}
+
+# cuda_majors_match — true when nvcc and ComfyUI's torch target the same
+# CUDA major version. torch's extension builder refuses a major mismatch, so
+# without this check a future image bump could burn 15-30 min of pod time on
+# every boot building a wheel that can never be produced. (On 1.4.7 both are
+# 13 — see the spec's reconnaissance results.)
+cuda_majors_match() {
+    local nv tv
+    nv="$(nvcc --version 2>/dev/null | sed -n 's/.*release \([0-9]*\)\..*/\1/p')"
+    tv="$("$PYTHON" -c 'import torch; print((torch.version.cuda or "").split(".")[0])' 2>/dev/null)"
+    [[ -n "$nv" && "$nv" == "$tv" ]]
+}
+
+# Name of the prebuilt SageAttention wheel in the mirror. It encodes the
+# python, CUDA and torch versions, so a wheel built on one image is never
+# installed onto an incompatible one.
+sage_wheel_path() {
+    local py cu tv
+    py="$("$PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null)" || return 1
+    tv="$("$PYTHON" -c 'import torch; print(torch.__version__.split("+")[0])' 2>/dev/null)" || return 1
+    cu="$("$PYTHON" -c 'import torch; print("cu" + torch.version.cuda.replace(".", ""))' 2>/dev/null)" || return 1
+    printf 'wheels/sageattention-%s-%s-torch%s.whl\n' "$py" "$cu" "$tv"
+}
+
+phase1_sageattention() {
+    local wheel_path wheel_local
+
+    log ""
+    log "──── phase 1: SageAttention ────"
+
+    if "$PYTHON" -c 'import sageattention' 2>/dev/null; then
+        log "• already importable — skip"
+        return 0
+    fi
+
+    wheel_path="$(sage_wheel_path)" || wheel_path=""
+
+    if [[ -n "$wheel_path" ]]; then
+        wheel_local="$STAGING/$(basename "$wheel_path")"
+        log "• looking for a prebuilt wheel: $wheel_path"
+        if fetch_mirror_file "$wheel_path" "$wheel_local" \
+            && "$PYTHON" -m pip install --no-input "$wheel_local"; then
+            log "• installed SageAttention 2++ from the mirror ✔"
+            rm -f "$wheel_local"
+            return 0
+        fi
+        rm -f "$wheel_local"
+        log "• no usable prebuilt wheel for this image"
+    fi
+
+    if "$PYTHON" -m pip install --no-input sageattention; then
+        log "• installed SageAttention v1 from PyPI ✔"
+    else
+        log "• could not install SageAttention at all"
+        FAILED+=("phase 1: no SageAttention")
+    fi
+
+    if command -v nvcc >/dev/null 2>&1 && cuda_majors_match; then
+        log "• nvcc matches torch's CUDA — building SageAttention 2++ in the background"
+        log "  (ComfyUI stays usable on v1 while this runs)"
+        nohup bash "$SCRIPT_PATH" --build-sage >> "$LOG" 2>&1 </dev/null &
+    else
+        log "• no nvcc, or its CUDA major differs from torch's — staying on SageAttention v1"
+    fi
+}
+
+# Runs in the background, once ever. Produces a wheel the user uploads to
+# the mirror by hand, so the pod never needs a write token.
+build_sage_wheel() {
+    local src="$STAGING/SageAttention"
+    local out="/workspace/wheels"
+    local wheel_path wheel
+
+    PYTHON="$(find_comfy_python)"
+    wheel_path="$(sage_wheel_path)" || return 1
+
+    log ""
+    log "──── background: building SageAttention 2++ ────"
+
+    rm -rf "$src"
+    if ! git clone --depth 1 https://github.com/thu-ml/SageAttention.git "$src"; then
+        log "❌ could not clone SageAttention"
+        return 1
+    fi
+
+    mkdir -p "$out"
+    if ! (cd "$src" && "$PYTHON" -m pip wheel . --no-deps --wheel-dir "$out"); then
+        log "❌ SageAttention build failed — staying on v1"
+        return 1
+    fi
+
+    wheel="$(ls -t "$out"/sageattention-*.whl 2>/dev/null | head -1)"
+    if [[ -z "$wheel" ]]; then
+        log "❌ build produced no wheel"
+        return 1
+    fi
+
+    "$PYTHON" -m pip install --no-input --force-reinstall "$wheel" || true
+
+    log ""
+    log "✅ SageAttention 2++ built: $wheel"
+    log "   ONE-TIME MANUAL STEP — upload it so every future pod skips this build:"
+    log "     export HF_WRITE_TOKEN=hf_xxx"
+    log "     HF_TOKEN=\$HF_WRITE_TOKEN hf upload $MIRROR_REPO $wheel $wheel_path"
+    log "   Do this before terminating the pod; the wheel dies with the volume."
+}
+
+phase2_node_packs() {
+    local dir url sha target current req tmp_req
+
+    log ""
+    log "──── phase 2: custom nodes ────"
+
+    NODES_CHANGED=0
+    mkdir -p "$COMFY_ROOT/custom_nodes"
+
+    while IFS='|' read -r dir url sha; do
+        [[ -n "$dir" ]] || continue
+        target="$COMFY_ROOT/custom_nodes/$dir"
+
+        if [[ -d "$target/.git" ]]; then
+            current="$(git -C "$target" rev-parse HEAD 2>/dev/null || true)"
+            if [[ "$current" == "$sha" ]]; then
+                log " [SKIP] $dir already at ${sha:0:8}"
+                continue
+            fi
+        else
+            rm -rf "$target"
+            if ! git clone --filter=blob:none "$url" "$target"; then
+                log " ❌ clone failed: $dir"
+                FAILED+=("node clone: $dir")
+                continue
+            fi
+        fi
+
+        git -C "$target" fetch --depth 1 origin "$sha" >/dev/null 2>&1 \
+            || git -C "$target" fetch origin >/dev/null 2>&1 \
+            || true
+
+        if git -C "$target" checkout --detach "$sha" >/dev/null 2>&1; then
+            log " • $dir → ${sha:0:8}"
+            NODES_CHANGED=1
+        else
+            log " ❌ commit not found: $dir @ $sha"
+            FAILED+=("node checkout: $dir")
+        fi
+    done <<< "$(active_node_pack_lines)"
+
+    log ""
+    log "──── phase 2b: safe node requirements ────"
+
+    while IFS='|' read -r dir url sha; do
+        [[ -n "$dir" ]] || continue
+
+        # The image manages these two itself; their requirements would only
+        # fight with the runtime.
+        if [[ "$dir" == "ComfyUI-Manager" || "$dir" == "ComfyUI-KJNodes" ]]; then
+            log " [SKIP] $dir is managed by the image"
+            continue
+        fi
+
+        req="$COMFY_ROOT/custom_nodes/$dir/requirements.txt"
+        [[ -f "$req" ]] || { log " [SKIP] $dir has no requirements.txt"; continue; }
+
+        tmp_req="$(mktemp)"
+        sanitize_requirements "$req" "$tmp_req"
+
+        if [[ ! -s "$tmp_req" ]]; then
+            log " [SKIP] $dir needs nothing beyond the runtime"
+            rm -f "$tmp_req"
+            continue
+        fi
+
+        log " • installing requirements for $dir"
+        if ! "$PYTHON" -m pip install --no-input --prefer-binary \
+            --upgrade-strategy only-if-needed -r "$tmp_req"; then
+            log " ⚠️  some optional requirements for $dir failed"
+        fi
+        rm -f "$tmp_req"
+    done <<< "$(active_node_pack_lines)"
+
+    # VideoHelperSuite needs this and it touches nothing GPU-related.
+    "$PYTHON" -m pip install --no-input --prefer-binary imageio-ffmpeg >/dev/null 2>&1 \
+        || FAILED+=("pip: imageio-ffmpeg")
+}
 
 main() {
     log "provision_minimax.sh: no phases implemented yet"

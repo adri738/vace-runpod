@@ -269,4 +269,46 @@ assert_eq "every custom_nodes destination is a pinned controlnet pack" "0" \
               [ "$(pins | awk -F'|' -v d="$d" '$1 == d {print $4}')" = controlnet ] || echo "$d"
           done | grep -c .)"
 
+echo "-- node pack manifest --"
+
+# The pin file's own content — counts, forks, groups — is already tested by
+# the "-- node pins --" block from Task 5d. What this block adds is that the
+# copy embedded in the script matches it, and that the group filter selects
+# the right packs for each template.
+
+# The embedded copy must never drift from the reviewable source of truth.
+assert_eq "embedded pins match docs/minimax-node-pins.txt" \
+    "$(grep -vE '^[[:space:]]*(#|$)' docs/minimax-node-pins.txt | sort | tr '\n' ' ')" \
+    "$(node_pack_lines | sort | tr '\n' ' ')"
+
+assert_eq "base template installs 13 packs" "13" \
+    "$(active_count_with false active_node_pack_lines)"
+
+assert_eq "ControlNet template installs 15 packs" "15" \
+    "$(active_count_with true active_node_pack_lines)"
+
+assert_eq "active pack lines are dir|url|sha" "0" \
+    "$( (export MINIMAX_CONTROLNET=true; active_node_pack_lines) \
+        | awk -F'|' 'NF != 3 || $3 !~ /^[0-9a-f]+$/ || length($3) != 40' | grep -c .)"
+
+assert_eq "base template never clones a ControlNet pack" "0" \
+    "$( (export MINIMAX_CONTROLNET=false; active_node_pack_lines) \
+        | grep -cE '^(ComfyUI-H3-FunControl|comfyui_controlnet_aux)\|')"
+
+echo "-- find_comfy_python --"
+
+# On the real image the only venv is .venv-cu128. An earlier draft searched
+# venv/ and .venv/ and then fell back to the system python3, which would
+# have installed every requirement into the wrong interpreter, silently.
+find_in() { COMFY_ROOT="$1" COMFY_PYTHON="" find_comfy_python; }
+
+fake="$TMP/fakecomfy"
+mkdir -p "$fake/.venv-cu128/bin"
+printf '#!/bin/sh\n' > "$fake/.venv-cu128/bin/python"
+chmod +x "$fake/.venv-cu128/bin/python"
+assert_eq "finds the image's .venv-cu128" "$fake/.venv-cu128/bin/python" "$(find_in "$fake")"
+
+mkdir -p "$TMP/novenv"
+assert_fail "no venv: fails rather than falling back to system python" find_in "$TMP/novenv"
+
 finish
