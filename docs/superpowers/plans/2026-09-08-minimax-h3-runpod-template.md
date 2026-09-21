@@ -1880,7 +1880,7 @@ curl -s -H "Authorization: Bearer ${HF_WRITE_TOKEN}" \
   | grep -oE '"path": "[^"]*"' | sort
 ```
 
-Expected: 16 paths, all at the repo root — 11 `.safetensors`, one each of `.pth`, `.onnx` and `.torchscript.pt`, and the 2 `.json` workflows. The mirror is flat, so there must be no `model_patches/` prefix even though that is where the ControlNet model lives in its source repo.
+Expected: 17 paths, all at the repo root — 11 `.safetensors`, one each of `.pth`, `.onnx` and `.torchscript.pt`, the 2 `.json` workflows, and the `.gitattributes` HuggingFace creates in every new repo. The mirror is flat, so there must be no `model_patches/` prefix even though that is where the ControlNet model lives in its source repo.
 
 - [ ] **Step 6: Create the read-only token for the template**
 

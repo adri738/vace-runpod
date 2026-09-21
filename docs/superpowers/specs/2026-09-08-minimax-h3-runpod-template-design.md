@@ -361,18 +361,38 @@ Against a real pod, in this order:
    end, with `RF PATCH SAGE` enabled and `RF SPEEDUP` bypassed. This is the only test that
    actually counts.
 
+## Reconnaissance results (pod session 1, 2026-09-21)
+
+Measured on `runpod/comfyui:1.4.7-cuda13.0`, GPU pod, datacenter ca-mtl-1.
+
+- **`nvcc` is present** — `/usr/local/cuda/bin/nvcc`, CUDA 13.0 V13.0.88. SageAttention stage 2
+  is viable and stays in the design.
+- **The entrypoint is `/start.sh`** — PID 1 is `/sbin/docker-init -- /start.sh`. The Container
+  Start Command's `exec /start.sh` is correct.
+- **The SAM3 nodes are ComfyUI core** — `comfy_extras/nodes_sam3.py`. No extra node pack.
+- **ComfyUI's Python is `/workspace/runpod-slim/ComfyUI/.venv-cu128/bin/python`** — Python
+  3.12.3, torch 2.10.0+cu130, CUDA 13.0, GPU available. The `cu128` in the name is legacy; its
+  torch is CUDA 13, so it matches `nvcc`. It is the only venv: there is no `venv/` or `.venv/`,
+  so the interpreter search must look for `.venv-cu130` / `.venv-cu128` and fail loudly if none
+  is found, never fall back to the system `python3`.
+- **`comfyui_args.txt` holds only its comment line** — no `--use-sage-attention`, so the
+  workflow's `RF PATCH SAGE` group is the one route to SageAttention and stays enabled.
+- **Tools:** `hf`, `curl`, `wget`, `sha256sum` present; `aria2c` absent (the download fallback
+  chain skips it).
+- **`/workspace` is a MooseFS network mount**; `df` reports the cluster, not the volume quota.
+- **The mirror is Xet-backed**; observed throughput 40-400 MB/s, and uploads of files already
+  present elsewhere on HF deduplicated to near-zero new data.
+
+Mirror state after the session: `adri73782/minimax-h3-ultra-v3`, private, 17 paths at the root —
+the 14 model files, the 2 workflow JSONs, and HF's automatic `.gitattributes`.
+
 ## Open questions to resolve during implementation
 
-- Does `runpod/comfyui:1.4.7-cuda13.0` include `nvcc`? Decides SageAttention stage 2.
-- Is the image entrypoint still `/start.sh` at 1.4.7? It was at 1.2.x, per the VACE template.
 - Does `comfyui_controlnet_aux`'s sanitized requirements install a GPU-capable
   `onnxruntime`? Its DWPose wrapper falls back to CPU and warns when onnxruntime lacks
   acceleration providers — functional, but slow. Check the startup log for that warning.
-- Which pack provides `SAM3_VideoTrack` / `SAM3_TrackToMask` / `SAM3_TrackPreview`? These are
-  not clearly attributable to any of the 13 packs and may now be part of ComfyUI core. If so,
-  one pack fewer.
-- Does the private mirror repo get Xet-backed storage (affects download throughput)? HTTP
-  fallback covers it either way.
+- Does the v2++ SageAttention build succeed against torch 2.10 / CUDA 13? `nvcc` and torch agree,
+  but the build itself has not been attempted. If it fails, the setup stays on v1.
 
 ## Out of scope (v1)
 
