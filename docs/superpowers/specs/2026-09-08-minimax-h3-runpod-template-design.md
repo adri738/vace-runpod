@@ -57,6 +57,13 @@ proven pattern as the existing VACE and SDXL templates in this repo — a
    model missing months later.
 7. **SageAttention in two stages** (see Architecture) rather than depending on the
    creator's prebuilt image.
+8. **Additive, not a replacement.** The user keeps using the creator's template as a
+   second option alongside this one. Nothing here may modify or depend on removing the
+   creator's setup. Her existing `RUNBOOK_MINIMAX_RUNPOD.md` stays the guide for the
+   creator's template, unchanged; `MINIMAX_INSTRUCTIONS.md` is the guide for this one.
+   The workflow itself is identical under both, so `MINIMAX_INSTRUCTIONS.md` covers
+   deploying and operating this template and points to the runbook for how to use the
+   workflow, rather than duplicating it.
 
 ## Architecture
 
