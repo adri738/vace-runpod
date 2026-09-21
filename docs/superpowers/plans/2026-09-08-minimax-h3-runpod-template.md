@@ -1576,6 +1576,120 @@ land where nothing looks and the pack silently re-downloads them."
 
 ---
 
+### Task 5e: Make Ctrl+C stop the mirror
+
+> Added 2026-09-21 after the first mirror run. The user pressed Ctrl+C and the script kept going: `hf` is a Python program, it catches SIGINT and exits with an ordinary error status, so bash sees one failed file rather than an interrupt, and — with no `set -e`, by design — moves on to the next 20 GB download. The only way out was killing processes from a second terminal.
+
+**Files:**
+- Modify: `mirror_minimax.sh` — one `trap` line at the top of `main`
+- Modify: `tests/test_mirror_minimax.sh` — add an `-- interrupt --` block before `finish`
+
+**Interfaces:**
+- Consumes: `main`, `copy_one`, `upload_workflows`, `require_tools` (Task 5, 5c) — stubbed in the test.
+- Produces: `main` exits 130 on INT or TERM, after the current step, without starting another file. Task 8 gives `provision_minimax.sh`'s `main` the same trap.
+
+Why a trap works where the default does not: bash only aborts a script on Ctrl+C by default when the foreground child *died from* SIGINT. `hf` does not die from it — it handles it and returns. With a trap installed, bash runs the handler once the current child returns, whatever that child did with the signal.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_mirror_minimax.sh`, immediately before `finish`:
+
+```bash
+echo "-- interrupt --"
+
+# What this fix is really about is INT: hf catches Ctrl+C and returns
+# normally, so without a trap bash never stops. That exact situation cannot
+# be replayed here — bash starts background jobs with SIGINT ignored, and a
+# signal ignored on entry cannot be trapped. So INT coverage is pinned by
+# reading the trap's signal list, and the stopping behaviour is proven with
+# TERM, which the same trap handles identically.
+assert_eq "main traps both INT and TERM" "1" \
+    "$(sed -n '/^main() {/,/^}/p' mirror_minimax.sh | grep -cE '^[[:space:]]*trap .* INT TERM$')"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+calls="$TMP/calls.log"
+: > "$calls"
+
+(
+    require_tools()    { return 0; }
+    hf()               { return 0; }
+    copy_one()         { echo "copy $1" >> "$calls"; sleep 2; }
+    upload_workflows() { echo "workflows" >> "$calls"; }
+    export HF_WRITE_TOKEN=test-only
+    WORK="$TMP/work"
+    main
+) > "$TMP/out.log" 2>&1 &
+run_pid=$!
+
+# Wait until the first file is being copied, so the signal lands mid-run
+# rather than racing process start-up, which is slow on Windows.
+for _ in $(seq 1 100); do
+    grep -q '^copy ' "$calls" && break
+    sleep 0.1
+done
+kill -TERM "$run_pid"
+wait "$run_pid"
+run_status=$?
+
+# 130 comes only from the trap. Without it, TERM's default action kills the
+# shell outright and the status is 143 — which is also why the two counts
+# below pass either way: they guard against a trap that forgets to exit.
+assert_eq "interrupted run exits 130, via the trap" "130" "$run_status"
+
+assert_eq "no further file starts after the interrupt" "1" \
+    "$(grep -c '^copy ' "$calls")"
+
+assert_eq "workflows are not uploaded after the interrupt" "0" \
+    "$(grep -c '^workflows' "$calls")"
+
+assert_eq "the stop is announced" "1" \
+    "$(grep -c 'interrupted' "$TMP/out.log")"
+```
+
+- [ ] **Step 2: Run it to make sure it fails**
+
+```bash
+bash tests/test_mirror_minimax.sh
+```
+
+Expected: exactly three of the five new assertions fail — `main traps both INT and TERM` (0), `interrupted run exits 130, via the trap` (143: killed by TERM's default action) and `the stop is announced` (0). The two counts pass before the fix, as their comment explains; do not "fix" the test to make them fail.
+
+- [ ] **Step 3: Add the trap**
+
+In `mirror_minimax.sh`, make this the first statement inside `main`, before the `HF_WRITE_TOKEN` check:
+
+```bash
+    # hf is a Python program: it catches Ctrl+C and exits with an ordinary
+    # error status, so bash would record one failed file and carry on to the
+    # next 20 GB download. With a trap, INT (Ctrl+C) and TERM (pkill, pod
+    # shutdown) stop the whole run once the current step returns. A re-run
+    # resumes: files already mirrored at the right size are skipped.
+    trap 'log ""; log "interrupted — stopping. Run the script again to resume."; exit 130' INT TERM
+```
+
+- [ ] **Step 4: Run everything**
+
+```bash
+bash -n mirror_minimax.sh && echo "syntax ok"
+bash tests/run_tests.sh
+```
+
+Expected: `syntax ok`; `14 test(s), 0 failure(s)` for the mirror file, `75 test(s), 0 failure(s)` for the provisioning file, `ALL TESTS PASSED`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add mirror_minimax.sh tests/test_mirror_minimax.sh
+git commit -m "fix: stop the mirror on Ctrl+C instead of moving to the next file
+
+hf catches SIGINT and exits normally, so bash treated each Ctrl+C as one
+failed file and started the next 20 GB download. A trap on INT and TERM
+now ends the run after the current step."
+```
+
+---
+
 ### Task 6: Pod session #1 — reconnaissance and mirror
 
 **Files:**
