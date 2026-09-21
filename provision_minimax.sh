@@ -341,7 +341,7 @@ build_sage_wheel() {
     fi
 
     mkdir -p "$out"
-    if ! (cd "$src" && "$PYTHON" -m pip wheel . --no-deps --wheel-dir "$out"); then
+    if ! (cd "$src" && "$PYTHON" -m pip wheel . --no-deps --no-build-isolation --wheel-dir "$out"); then
         log "❌ SageAttention build failed — staying on v1"
         return 1
     fi
@@ -710,7 +710,9 @@ summary() {
 }
 
 main() {
-    setup_logging
+    # --build-sage runs via nohup ... >> "$LOG", so setup_logging's tee
+    # would duplicate every line. Skip it for that mode.
+    [[ "${1:-}" != "--build-sage" ]] && setup_logging
 
     # Keep HuggingFace's caches on the 150 GB volume, not the 25 GB container
     # disk: the Xet backend keeps a chunk cache of up to ~10 GB, and the
