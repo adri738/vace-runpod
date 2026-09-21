@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a RunPod template the user owns end to end for the MiniMax H3 Ultra V3 workflow — official base image, own provisioning script, own private model mirror, own forks of the fragile node packs.
+**Goal:** Build two RunPod templates the user owns end to end for the MiniMax H3 Ultra V3 workflow — `minimax-h3` without ControlNet and `minimax-h3-controlnet` with it — on an official base image, with her own provisioning script, her own private model mirror and her own forks of the fragile node packs. The creator's template stays available as a third option.
 
-**Architecture:** Two bash scripts in the existing public repo `adri738/vace-runpod`. `mirror_minimax.sh` runs once ever and copies 10 model files (83,169,189,972 bytes) from `Aitrepreneur/FLX` into a private HuggingFace repo. `provision_minimax.sh` runs on every pod boot, fetched by the Container Start Command, and installs SageAttention, 13 custom-node packs at pinned commits, the 10 models, and both workflow JSONs. Both scripts are self-contained single files (they are fetched by `curl` at boot, so they cannot depend on sibling files), but expose their pure functions for local unit testing via a `BASH_SOURCE` guard.
+**Architecture:** Two bash scripts in the existing public repo `adri738/vace-runpod`. `mirror_minimax.sh` runs once ever and copies all 14 model files (89,084,560,623 bytes) from their five source repos into a private HuggingFace repo. `provision_minimax.sh` runs on every pod boot, fetched by the Container Start Command, and installs SageAttention plus the node packs, models and workflow JSONs of the active groups: `base` always (13 packs, 10 models, the main workflow), `controlnet` on top when `MINIMAX_CONTROLNET` is on (2 more packs, 4 more files, the ControlNet workflow). The two RunPod templates differ only in that variable. Both scripts are self-contained single files (they are fetched by `curl` at boot, so they cannot depend on sibling files), but expose their pure functions for local unit testing via a `BASH_SOURCE` guard.
+
+**Amended 2026-09-21:** Tasks 5c and 5d were inserted and Tasks 6-10 updated for the two-template design. Tasks 1-5 and 5b were implemented against the original single-template design; 5c and 5d bring their artifacts forward.
 
 **Tech Stack:** Bash 4+, git, curl/aria2c/wget, HuggingFace `hf` CLI, ComfyUI, RunPod. Tests are plain bash with a tiny hand-rolled assertion harness — no bats, no python (the user's Windows machine has no `python` on PATH).
 
@@ -20,7 +22,10 @@
 - Public GitHub repo: `adri738/vace-runpod`, branch `minimax-h3-template` during development; scripts must reach `main` before a pod can fetch them.
 - **The two workflow JSONs are paid content and must NEVER be committed to the public GitHub repo.** They travel only through the private HF mirror. `.gitignore` must block them.
 - The pod only ever holds a **read-only, single-repo** HF token. The write token is used by hand, once, and never stored in the template.
-- All 10 models download every boot. There is no partial/lite profile.
+- Two templates, one script: `minimax-h3` (`MINIMAX_CONTROLNET=false`) and `minimax-h3-controlnet` (`MINIMAX_CONTROLNET=true`). Only `true`, `1` or `yes`, in any case, turns ControlNet on; anything else, unset included, means base only.
+- Every node pack, model and workflow carries a group, `base` or `controlnet`. All 10 base models download on every boot of either template — there is no partial profile within `base`; `controlnet` only ever adds.
+- Model validation: exact byte size for every file, plus a safetensors header parse for `.safetensors` files only — three ControlNet files are `.pth`/`.onnx`/`.pt`.
+- Never probe a possibly-missing GitHub repo with plain `git`: on the user's Windows machine it pops up a GitHub account picker. Use the REST API via `curl`, or `GIT_TERMINAL_PROMPT=0 git -c credential.helper= ...`.
 - Scripts never use `set -e`. Failures accumulate in a `FAILED` array and are reported in a final summary, matching `provision_vace.sh` and `provision_sdxl.sh`.
 - All side effects live inside functions. Top level defines constants and functions only, so tests can source the script safely.
 
@@ -32,12 +37,12 @@
 |---|---|
 | `provision_minimax.sh` (create) | Boot-time provisioner. Phases 0-5. Self-contained, sourceable. |
 | `mirror_minimax.sh` (create) | One-time mirror population. Self-contained, sourceable. |
-| `docs/minimax-node-pins.txt` (create) | Single source of truth for the 13 node packs and their pinned commits. Embedded verbatim into `provision_minimax.sh`; a test asserts the two never drift. |
+| `docs/minimax-node-pins.txt` (create) | Single source of truth for the 15 node packs, their pinned commits and their groups. Embedded verbatim into `provision_minimax.sh`; a test asserts the two never drift. |
 | `tests/helpers.sh` (create) | Dependency-free assertion harness plus safetensors fixture builders. |
 | `tests/test_provision_minimax.sh` (create) | Unit tests for the pure functions of `provision_minimax.sh`. |
 | `tests/run_tests.sh` (create) | Runs every `tests/test_*.sh`, exits non-zero on any failure. |
-| `MINIMAX_INSTRUCTIONS.md` (create) | User-facing guide, sibling of `SDXL_INSTRUCTIONS.md`. |
-| `README.md` (modify) | Add the third template to the intro. |
+| `MINIMAX_INSTRUCTIONS.md` (create) | User-facing guide for both MiniMax templates, sibling of `SDXL_INSTRUCTIONS.md`. |
+| `README.md` (modify) | Add the two MiniMax templates to the intro. |
 | `.gitignore` (modify) | Block `MINIMAX_*WORKFLOW*.json`. |
 
 Two tasks (6 and 10) run on a real RunPod pod rather than locally. They are ordered so the user pays for exactly two pod sessions.
@@ -973,6 +978,604 @@ paid workflow JSONs."
 
 ---
 
+### Task 5c: ControlNet data in both scripts
+
+> Added 2026-09-21. The user wants two templates of her own — `minimax-h3` without ControlNet and `minimax-h3-controlnet` with it — driven by one script and one mirror. See spec decision 9 and the ControlNet tables in the spec's model inventory.
+
+**Files:**
+- Modify: `provision_minimax.sh` — add `model_ok`; replace `MODEL_MANIFEST` and `WORKFLOW_FILES`; add `controlnet_enabled`, `in_active_group`, `active_manifest_lines`, `active_workflow_lines`
+- Modify: `mirror_minimax.sh` — replace the header comment and `MIRROR_MANIFEST`; give `copy_one` a per-file source; update `main`; remove `SOURCE_REPO`
+- Modify: `tests/test_provision_minimax.sh` — replace the model-manifest block; add group-selection, workflow and `model_ok` blocks
+- Modify: `tests/test_mirror_minimax.sh` — replace in full
+
+**Interfaces:**
+- Consumes: `safetensors_ok` and the `make_safetensors` fixture (Task 2).
+- Produces:
+  - `model_ok <file> <expected_bytes>` — exact byte size for every file, plus the header parse for `.safetensors`. **Task 8's `download_model` calls this, not `safetensors_ok`**, because three ControlNet files are `.pth`/`.onnx`/`.pt` and have no safetensors header.
+  - `manifest_lines` → `filename|dest_rel|bytes|group`. `dest_rel` is relative to `COMFY_ROOT` (e.g. `models/vae`), no longer a bare `models/` subfolder, because the preprocessor files live under `custom_nodes/`.
+  - `active_manifest_lines` → `filename|dest_rel|bytes` for the groups this template installs.
+  - `workflow_lines` → `filename|group`; `active_workflow_lines` → `filename`.
+  - `controlnet_enabled` — exit 0 when `MINIMAX_CONTROLNET` is `true`, `1` or `yes`, in any case.
+  - `in_active_group` — stdin filter: keeps lines whose last field is `base`, or `controlnet` when enabled, and strips that field. Task 7 reuses it for node packs.
+
+**Why both scripts in one task:** `tests/test_mirror_minimax.sh` asserts the two manifests list the same files at the same sizes. Changing either one alone turns the suite red — correctly — so they move together, and a reviewer could not approve one half without the other.
+
+- [ ] **Step 1: Write the failing provisioning tests**
+
+In `tests/test_provision_minimax.sh`, replace the whole block that starts at `echo "-- model manifest --"` and ends just before the final `finish` with:
+
+```bash
+echo "-- model manifest --"
+
+assert_eq "manifest has 14 entries" "14" "$(manifest_lines | grep -c .)"
+
+assert_eq "10 base entries" "10" \
+    "$(manifest_lines | awk -F'|' '$4 == "base"' | grep -c .)"
+
+assert_eq "4 controlnet entries" "4" \
+    "$(manifest_lines | awk -F'|' '$4 == "controlnet"' | grep -c .)"
+
+assert_eq "base group totals 83169189972 bytes" "83169189972" \
+    "$(manifest_lines | awk -F'|' '$4 == "base" {s += $3} END {printf "%d", s}')"
+
+assert_eq "manifest totals 89084560623 bytes" "89084560623" \
+    "$(manifest_lines | awk -F'|' '{s += $3} END {printf "%d", s}')"
+
+assert_eq "no duplicate filenames" "0" \
+    "$(manifest_lines | cut -d'|' -f1 | sort | uniq -d | grep -c .)"
+
+assert_eq "every line has four fields" "0" \
+    "$(manifest_lines | awk -F'|' 'NF != 4' | grep -c .)"
+
+assert_eq "every size is a positive integer" "0" \
+    "$(manifest_lines | awk -F'|' '$3 !~ /^[1-9][0-9]*$/' | grep -c .)"
+
+assert_eq "every group is base or controlnet" "0" \
+    "$(manifest_lines | awk -F'|' '$4 != "base" && $4 != "controlnet"' | grep -c .)"
+
+assert_eq "every destination is an allowed folder" "0" \
+    "$(manifest_lines | awk -F'|' '
+        $2 != "models/text_encoders" && $2 != "models/diffusion_models" &&
+        $2 != "models/vae" && $2 != "models/checkpoints" &&
+        $2 != "models/loras" && $2 != "models/vae_approx" &&
+        $2 != "models/latent_upscale_models" && $2 != "models/controlnet" &&
+        $2 !~ /^custom_nodes\/comfyui_controlnet_aux\/ckpts\/[^\/]+\/[^\/]+$/' | grep -c .)"
+
+assert_eq "base files never leave models/" "0" \
+    "$(manifest_lines | awk -F'|' '$4 == "base" && $2 !~ /^models\//' | grep -c .)"
+
+assert_eq "text encoder is present at its exact size" "27141342152" \
+    "$(manifest_lines | awk -F'|' '$1 == "qwen3vl_32b_minimax_h3_int8_convrot.safetensors" {print $3}')"
+
+assert_eq "reference-to-video model is present" "1" \
+    "$(manifest_lines | grep -c '^minimax_h3_ref2va_pruned_int8_convrot\.safetensors|models/diffusion_models|')"
+
+assert_eq "controlnet model goes where the FunControl loader looks" "models/controlnet" \
+    "$(manifest_lines | awk -F'|' '$1 == "minimax_h3_fun_controlnet_union_pruned_bf16.safetensors" {print $2}')"
+
+echo "-- group selection --"
+
+# active_count_with <value|__unset__> <lister> — runs the lister in a
+# subshell with MINIMAX_CONTROLNET set (or unset), so no assertion can leak
+# the variable into the next one.
+active_count_with() {
+    (
+        if [[ "$1" == "__unset__" ]]; then
+            unset MINIMAX_CONTROLNET
+        else
+            export MINIMAX_CONTROLNET="$1"
+        fi
+        "$2" | grep -c .
+    )
+}
+
+assert_eq "unset -> base only"           "10" "$(active_count_with __unset__ active_manifest_lines)"
+assert_eq "false -> base only"           "10" "$(active_count_with false active_manifest_lines)"
+assert_eq "empty -> base only"           "10" "$(active_count_with '' active_manifest_lines)"
+assert_eq "misspelt 'ture' -> base only" "10" "$(active_count_with ture active_manifest_lines)"
+assert_eq "true -> all 14"               "14" "$(active_count_with true active_manifest_lines)"
+assert_eq "TRUE -> all 14"               "14" "$(active_count_with TRUE active_manifest_lines)"
+assert_eq "1 -> all 14"                  "14" "$(active_count_with 1 active_manifest_lines)"
+assert_eq "yes -> all 14"                "14" "$(active_count_with yes active_manifest_lines)"
+
+assert_eq "active lines drop the group field" "0" \
+    "$( (export MINIMAX_CONTROLNET=true; active_manifest_lines) | awk -F'|' 'NF != 3' | grep -c .)"
+
+assert_eq "base template never receives a controlnet file" "0" \
+    "$( (export MINIMAX_CONTROLNET=false; active_manifest_lines) \
+        | grep -cE '\.(onnx|pt|pth)\||fun_controlnet|/ckpts/')"
+
+echo "-- workflows --"
+
+assert_eq "two workflows" "2" "$(workflow_lines | grep -c .)"
+
+assert_eq "main workflow is base" "MINIMAX_H3_ULTRA_WORKFLOW-V3.json|base" \
+    "$(workflow_lines | grep '^MINIMAX_H3_ULTRA_WORKFLOW-V3\.json|')"
+
+assert_eq "ControlNet workflow is controlnet" \
+    "MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json|controlnet" \
+    "$(workflow_lines | grep '_CONTROLNET\.json|')"
+
+assert_eq "base template gets only the main workflow" \
+    "MINIMAX_H3_ULTRA_WORKFLOW-V3.json" \
+    "$( (export MINIMAX_CONTROLNET=false; active_workflow_lines) )"
+
+assert_eq "ControlNet template gets both workflows" "2" \
+    "$(active_count_with true active_workflow_lines)"
+
+echo "-- model_ok --"
+
+make_safetensors "$TMP/ok.safetensors"
+assert_ok "safetensors: valid at its size" model_ok "$TMP/ok.safetensors" 66
+
+# Right size, but not a safetensors file. A size-only check would accept it,
+# so rejecting it proves model_ok really hands .safetensors files to the
+# header check instead of stopping at the size.
+printf 'not a safetensors file, only text' > "$TMP/fake.safetensors"
+assert_fail "safetensors: right size, no valid header" \
+    model_ok "$TMP/fake.safetensors" "$(stat -c%s "$TMP/fake.safetensors")"
+
+printf 'ONNXDATA%.0s' {1..10} > "$TMP/model.onnx"
+assert_ok   "onnx: exact size is enough"      model_ok "$TMP/model.onnx" 80
+assert_fail "onnx: wrong size is rejected"    model_ok "$TMP/model.onnx" 81
+
+head -c 50 "$TMP/model.onnx" > "$TMP/cut.pt"
+assert_fail "pt: truncated download rejected" model_ok "$TMP/cut.pt" 80
+
+assert_fail "pth: missing file rejected"      model_ok "$TMP/absent.pth" 80
+```
+
+- [ ] **Step 2: Run it to make sure it fails**
+
+```bash
+bash tests/test_provision_minimax.sh
+```
+
+Expected: failures on the new counts and `model_ok: command not found`, `active_manifest_lines: command not found`.
+
+- [ ] **Step 3: Implement the provisioning side**
+
+In `provision_minimax.sh`, add immediately after `safetensors_ok`:
+
+```bash
+# model_ok <file> <expected_bytes>
+#
+# Not every model is safetensors: the ControlNet preprocessors ship as .pth,
+# .onnx and .pt, which have no header to parse. For those the exact byte
+# size — known ahead of time from the HuggingFace tree API and baked into
+# MODEL_MANIFEST — is the whole check, and it still rejects every truncated
+# download. .safetensors files get the stricter safetensors_ok, header
+# included, so an HTML error page of the right size cannot slip through.
+model_ok() {
+    local file="$1" expected="$2" actual
+
+    case "$file" in
+        *.safetensors)
+            safetensors_ok "$file" "$expected"
+            return
+            ;;
+    esac
+
+    [[ -f "$file" ]] || return 1
+    actual="$(stat -c%s "$file" 2>/dev/null)" || return 1
+    [[ "$actual" == "$expected" ]]
+}
+```
+
+Then replace everything from the `# filename|comfyui models subdirectory|exact size in bytes` comment down to the end of `workflow_lines()` with:
+
+```bash
+# filename|destination relative to COMFY_ROOT|exact size in bytes|group
+#
+# Sizes read from the HuggingFace tree API (base 2026-09-08, controlnet
+# 2026-09-21). They are the contract model_ok checks each download against,
+# so they must never be edited by hand — regenerate them from the API if the
+# mirror content ever changes.
+#
+# Group "base" installs on both templates; "controlnet" only when
+# MINIMAX_CONTROLNET is on. The controlnet destinations were read from the
+# node sources, not guessed: the FunControl loader lists folder_paths
+# category "controlnet", and comfyui_controlnet_aux reuses
+# ckpts/<hf_repo_id>/<file> when it is already there instead of downloading.
+MODEL_MANIFEST='
+qwen3vl_32b_minimax_h3_int8_convrot.safetensors|models/text_encoders|27141342152|base
+minimax_h3_fl2va_pruned_int8_convrot.safetensors|models/diffusion_models|20970379616|base
+minimax_h3_ref2va_pruned_int8_convrot.safetensors|models/diffusion_models|20970379616|base
+minimax_h3_t1_image_vae_step1597.safetensors|models/vae|5207808784|base
+minimax_h3_video_vae_fp16.safetensors|models/vae|5207808496|base
+sam3.1_multiplex_fp16.safetensors|models/checkpoints|1745546848|base
+minimax_h3_latent_upscaler_3d_fp16.safetensors|models/latent_upscale_models|690592672|base
+minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors|models/loras|620285592|base
+minimax_h3_audio_vae_fp32.safetensors|models/vae|605254808|base
+taeh3.safetensors|models/vae_approx|9791388|base
+minimax_h3_fun_controlnet_union_pruned_bf16.safetensors|models/controlnet|4222169456|controlnet
+depth_anything_v2_vitl.pth|custom_nodes/comfyui_controlnet_aux/ckpts/depth-anything/Depth-Anything-V2-Large|1341395338|controlnet
+yolox_l.onnx|custom_nodes/comfyui_controlnet_aux/ckpts/yzd-v/DWPose|216746733|controlnet
+dw-ll_ucoco_384_bs5.torchscript.pt|custom_nodes/comfyui_controlnet_aux/ckpts/hr16/DWPose-TorchScript-BatchSize5|135059124|controlnet
+'
+
+# filename|group
+WORKFLOW_FILES='
+MINIMAX_H3_ULTRA_WORKFLOW-V3.json|base
+MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json|controlnet
+'
+
+manifest_lines() {
+    printf '%s\n' "$MODEL_MANIFEST" | grep -vE '^[[:space:]]*(#|$)'
+}
+
+workflow_lines() {
+    printf '%s\n' "$WORKFLOW_FILES" | grep -vE '^[[:space:]]*(#|$)'
+}
+
+# controlnet_enabled — true when MINIMAX_CONTROLNET is true, 1 or yes, in any
+# case. Everything else, unset or misspelt included, means base only: when
+# in doubt the script installs the smaller set, never the larger one.
+controlnet_enabled() {
+    case "${MINIMAX_CONTROLNET:-}" in
+        [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# in_active_group — filter for group-tagged lines on stdin, the group being
+# the last |-separated field. Prints only the lines this template installs,
+# with the group field removed, so every consumer sees one fixed shape
+# whatever the tagging. Used for models, workflows and node packs alike.
+# Plain sub() rather than NF surgery, so it behaves the same in gawk and
+# mawk.
+in_active_group() {
+    local cn=0
+    controlnet_enabled && cn=1
+    awk -v cn="$cn" '
+        {
+            group = $0
+            sub(/.*\|/, "", group)
+            if (group == "base" || (cn == 1 && group == "controlnet")) {
+                sub(/\|[^|]*$/, "")
+                print
+            }
+        }'
+}
+
+active_manifest_lines() { manifest_lines | in_active_group; }
+active_workflow_lines() { workflow_lines | in_active_group; }
+```
+
+- [ ] **Step 4: Run the provisioning tests**
+
+```bash
+bash tests/test_provision_minimax.sh
+```
+
+Expected: `67 test(s), 0 failure(s)`. (`tests/test_mirror_minimax.sh` is still red at this point — its manifest has 10 rows against 14. That is the drift test doing its job; Step 5 fixes it.)
+
+- [ ] **Step 5: Mirror side — tests, then implementation**
+
+Replace `tests/test_mirror_minimax.sh` in full with:
+
+```bash
+#!/usr/bin/env bash
+cd "$(dirname "$0")/.." || exit 1
+source tests/helpers.sh
+source provision_minimax.sh
+source mirror_minimax.sh
+
+echo "-- mirror manifest agrees with provisioning manifest --"
+
+assert_eq "same number of files" \
+    "$(manifest_lines | grep -c .)" \
+    "$(mirror_manifest_lines | grep -c .)"
+
+assert_eq "same filenames" \
+    "$(manifest_lines | cut -d'|' -f1 | sort | tr '\n' ' ')" \
+    "$(mirror_manifest_lines | cut -d'|' -f1 | sort | tr '\n' ' ')"
+
+assert_eq "same sizes" \
+    "$(manifest_lines | awk -F'|' '{print $1 "=" $3}' | sort | tr '\n' ' ')" \
+    "$(mirror_manifest_lines | awk -F'|' '{print $1 "=" $2}' | sort | tr '\n' ' ')"
+
+assert_eq "every sha256 is 64 hex characters" "0" \
+    "$(mirror_manifest_lines | awk -F'|' 'length($3) != 64 || $3 !~ /^[0-9a-f]+$/' | grep -c .)"
+
+echo "-- mirror sources --"
+
+assert_eq "every mirror line has five fields" "0" \
+    "$(mirror_manifest_lines | awk -F'|' 'NF != 5' | grep -c .)"
+
+assert_eq "every source repo is owner/name" "0" \
+    "$(mirror_manifest_lines | awk -F'|' '$4 !~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/' | grep -c .)"
+
+assert_eq "every source path ends in its own filename" "0" \
+    "$(mirror_manifest_lines | awk -F'|' '{n = split($5, p, "/"); if (p[n] != $1) print}' | grep -c .)"
+
+# The base group is exactly the set that comes from the creator's repo; the
+# ControlNet files all come from elsewhere. A row filed under the wrong
+# source would still download fine from some public repo and never be
+# noticed, so the two sets are pinned against each other.
+assert_eq "base files are exactly those sourced from Aitrepreneur/FLX" \
+    "$(manifest_lines | awk -F'|' '$4 == "base" {print $1}' | sort | tr '\n' ' ')" \
+    "$(mirror_manifest_lines | awk -F'|' '$4 == "Aitrepreneur/FLX" {print $1}' | sort | tr '\n' ' ')"
+
+echo "-- workflows --"
+
+# The workflow filenames are duplicated between the two scripts for the same
+# reason the manifest is: each script is fetched standalone. This assertion is
+# what keeps the duplicate honest. One of these names has already gone stale
+# once, so it is not a hypothetical. provision_minimax.sh tags each name with
+# its group while the mirror carries every workflow, so only names compare.
+assert_eq "same workflow filenames" \
+    "$(workflow_lines | cut -d'|' -f1 | sort | tr '\n' ' ')" \
+    "$(mirror_workflow_lines | sort | tr '\n' ' ')"
+
+finish
+```
+
+Now change `mirror_minimax.sh` in four places.
+
+(a) Replace the header comment's second paragraph — the lines from `# RUN THIS ONCE, EVER` through `# the two workflow JSONs if they are present locally.` — with:
+
+```bash
+# RUN THIS ONCE, EVER, from a RunPod pod (a cheap CPU-only pod is fine).
+# It copies all 14 model files — the base set both templates use plus the
+# ControlNet set — from their five public source repos into the user's own
+# private HuggingFace repo, verifying sha256 on the way, and uploads the two
+# workflow JSONs if they are present locally.
+```
+
+(b) Delete the line `SOURCE_REPO="${MINIMAX_SOURCE_REPO:-Aitrepreneur/FLX}"`. Every file now names its own source.
+
+(c) Replace the `# filename|expected bytes|sha256` comment and the whole `MIRROR_MANIFEST` constant with:
+
+```bash
+# filename|expected bytes|sha256|source repo|path within the source repo
+#
+# Every file names its own source, because they come from five different
+# repositories: the creator's for the base models, and four upstream
+# projects for ControlNet. The mirror itself is flat — each file lands at the
+# repo root under its own name, unique across all fourteen — so the
+# provisioning script never needs to know where a file originally came from.
+MIRROR_MANIFEST='
+qwen3vl_32b_minimax_h3_int8_convrot.safetensors|27141342152|bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923|Aitrepreneur/FLX|qwen3vl_32b_minimax_h3_int8_convrot.safetensors
+minimax_h3_fl2va_pruned_int8_convrot.safetensors|20970379616|e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a|Aitrepreneur/FLX|minimax_h3_fl2va_pruned_int8_convrot.safetensors
+minimax_h3_ref2va_pruned_int8_convrot.safetensors|20970379616|9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779|Aitrepreneur/FLX|minimax_h3_ref2va_pruned_int8_convrot.safetensors
+minimax_h3_t1_image_vae_step1597.safetensors|5207808784|6c3d0bfa055986a803a566a862fcde283a1e63db62829e5ef4a2a5aebf50bb86|Aitrepreneur/FLX|minimax_h3_t1_image_vae_step1597.safetensors
+minimax_h3_video_vae_fp16.safetensors|5207808496|7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522|Aitrepreneur/FLX|minimax_h3_video_vae_fp16.safetensors
+sam3.1_multiplex_fp16.safetensors|1745546848|9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03|Aitrepreneur/FLX|sam3.1_multiplex_fp16.safetensors
+minimax_h3_latent_upscaler_3d_fp16.safetensors|690592672|043e5a48e161610ef6c3ea974645220354d06fa618abca15f76d084812eb55c2|Aitrepreneur/FLX|minimax_h3_latent_upscaler_3d_fp16.safetensors
+minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors|620285592|7098acf3ee75028fd9fcd948f50fcc8d995057fabb76f86bd3ca2c0ffc58e409|Aitrepreneur/FLX|minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors
+minimax_h3_audio_vae_fp32.safetensors|605254808|8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48|Aitrepreneur/FLX|minimax_h3_audio_vae_fp32.safetensors
+taeh3.safetensors|9791388|f0f60fa072089997f817402098c2fd90777cb2660dd79cf5df42fc1e3e08e527|Aitrepreneur/FLX|taeh3.safetensors
+minimax_h3_fun_controlnet_union_pruned_bf16.safetensors|4222169456|57fe1e64928a63a55e3cd4586b55cd5d0eb4980648b6f31e5d9dac16fe7f1c48|Comfy-Org/MiniMax-H3|model_patches/minimax_h3_fun_controlnet_union_pruned_bf16.safetensors
+depth_anything_v2_vitl.pth|1341395338|a7ea19fa0ed99244e67b624c72b8580b7e9553043245905be58796a608eb9345|depth-anything/Depth-Anything-V2-Large|depth_anything_v2_vitl.pth
+yolox_l.onnx|216746733|7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411|yzd-v/DWPose|yolox_l.onnx
+dw-ll_ucoco_384_bs5.torchscript.pt|135059124|d86a0b2b59fddc0901a7076e9f59c9f8602602133ed72511c693fd11eea23d91|hr16/DWPose-TorchScript-BatchSize5|dw-ll_ucoco_384_bs5.torchscript.pt
+'
+```
+
+(d) In `copy_one`: change the first two `local` lines to
+
+```bash
+    local name="$1" bytes="$2" want_sha="$3" src_repo="$4" src_path="$5"
+    local local_file="$WORK/$src_path"
+```
+
+change the download log line to
+
+```bash
+    log " • downloading $name ($bytes bytes) from $src_repo"
+```
+
+and change the download call to
+
+```bash
+    if ! hf download "$src_repo" "$src_path" --local-dir "$WORK" >/dev/null; then
+```
+
+`hf download --local-dir` keeps the file's path inside the source repo, so the ControlNet model lands at `$WORK/model_patches/<file>` — which is exactly what `local_file` now points at. Everything after the download (size check, sha256, upload to `"$name"` at the mirror root, cleanup on every failure path) stays as it is.
+
+In `main`: extend the `local` line to `local name bytes sha src_repo src_path`; replace the banner line with
+
+```bash
+    log "════ mirroring $(mirror_manifest_lines | grep -c .) files -> $MIRROR_REPO ════"
+```
+
+replace the read loop with
+
+```bash
+    while IFS='|' read -r name bytes sha src_repo src_path; do
+        [[ -n "$name" ]] || continue
+        copy_one "$name" "$bytes" "$sha" "$src_repo" "$src_path"
+    done <<< "$(mirror_manifest_lines)"
+```
+
+and change the success line to
+
+```bash
+        log "✅ mirror complete — $MIRROR_REPO now holds everything both templates need."
+```
+
+- [ ] **Step 6: Run everything**
+
+```bash
+bash -n provision_minimax.sh && bash -n mirror_minimax.sh && echo "syntax ok"
+bash tests/run_tests.sh
+grep -n 'SOURCE_REPO' mirror_minimax.sh || echo "ok: no SOURCE_REPO left"
+```
+
+Expected: `syntax ok`; `9 test(s), 0 failure(s)` for the mirror file and `67 test(s), 0 failure(s)` for the provisioning file; `ALL TESTS PASSED`; `ok: no SOURCE_REPO left`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add provision_minimax.sh mirror_minimax.sh tests/test_provision_minimax.sh tests/test_mirror_minimax.sh
+git commit -m "feat: add the ControlNet group to both manifests
+
+Every model and workflow now carries a base/controlnet tag, and
+MINIMAX_CONTROLNET picks which groups a template installs. One script
+serves both the minimax-h3 and minimax-h3-controlnet templates.
+
+Four ControlNet files join the mirror from four non-creator repos, so
+each mirror row now names its own source. Three of them are not
+safetensors; model_ok validates those by exact size and keeps the
+header parse for .safetensors."
+```
+
+---
+
+### Task 5d: Pin the two ControlNet packs
+
+> Added 2026-09-21 alongside Task 5c. **Blocked until the user has forked `wyzborrero/ComfyUI-H3-FunControl` to `adri738`.**
+
+**Files:**
+- Modify: `docs/minimax-node-pins.txt` — rewrite the header comment, add a fourth field `group` to every pin, append two pins
+- Modify: `tests/test_provision_minimax.sh` — add a `-- node pins --` block before `finish`
+
+**Interfaces:**
+- Consumes: `manifest_lines` (Task 5c), for the cross-check below.
+- Produces: `docs/minimax-node-pins.txt` with 15 pins of `directory|clone_url|commit_sha|group`. Task 7 embeds this file verbatim and filters it through `in_active_group`.
+
+**The 13 existing pins must not move.** They were verified live and reviewed in Task 1. Re-running Task 1's generator would silently re-resolve all 13 to whatever each upstream's HEAD is today — an unreviewed change to every pack at once. So this task tags the existing lines, appends two, and never re-resolves the old ones.
+
+**Never probe the fork with plain `git`.** When a repo is missing, Git Credential Manager on the user's Windows desktop pops up a GitHub account picker — this happened once already. Check existence through the REST API, and when calling `git ls-remote` at all, disable both the prompt and the credential helper as shown.
+
+- [ ] **Step 1: Confirm the fork exists**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://api.github.com/repos/adri738/ComfyUI-H3-FunControl
+```
+
+Expected: `200`. On `404`, stop and report BLOCKED — the user has not forked yet. Do not substitute the upstream URL.
+
+- [ ] **Step 2: Write the failing tests**
+
+Append to `tests/test_provision_minimax.sh`, immediately before the final `finish`:
+
+```bash
+echo "-- node pins --"
+
+pins() { grep -vE '^[[:space:]]*(#|$)' docs/minimax-node-pins.txt; }
+
+assert_eq "15 pinned packs" "15" "$(pins | grep -c .)"
+
+assert_eq "every pin has four fields" "0" \
+    "$(pins | awk -F'|' 'NF != 4' | grep -c .)"
+
+assert_eq "13 base packs" "13" "$(pins | awk -F'|' '$4 == "base"' | grep -c .)"
+
+assert_eq "2 controlnet packs" "2" "$(pins | awk -F'|' '$4 == "controlnet"' | grep -c .)"
+
+assert_eq "ten packs are adri738 forks" "10" \
+    "$(pins | grep -c '|https://github.com/adri738/')"
+
+assert_eq "FunControl is the user's fork" \
+    "ComfyUI-H3-FunControl|https://github.com/adri738/ComfyUI-H3-FunControl.git" \
+    "$(pins | awk -F'|' '$1 == "ComfyUI-H3-FunControl" {print $1 "|" $2}')"
+
+assert_eq "controlnet_aux stays on upstream" \
+    "https://github.com/Fannovel16/comfyui_controlnet_aux.git" \
+    "$(pins | awk -F'|' '$1 == "comfyui_controlnet_aux" {print $2}')"
+
+# The preprocessor models are placed inside a node pack's own directory. If
+# that directory name and the pack's pinned directory ever disagree, the
+# files land where nothing looks for them and controlnet_aux quietly
+# downloads its own copies instead — every single session.
+assert_eq "every custom_nodes destination is a pinned controlnet pack" "0" \
+    "$(manifest_lines | awk -F'|' '$2 ~ /^custom_nodes\// {split($2, p, "/"); print p[2]}' \
+        | sort -u \
+        | while read -r d; do
+              [ "$(pins | awk -F'|' -v d="$d" '$1 == d {print $4}')" = controlnet ] || echo "$d"
+          done | grep -c .)"
+```
+
+- [ ] **Step 3: Run it to make sure it fails**
+
+```bash
+bash tests/test_provision_minimax.sh
+```
+
+Expected: failures on the pin counts, the field count and both new packs.
+
+- [ ] **Step 4: Tag, then append**
+
+```bash
+P=docs/minimax-node-pins.txt
+
+# Header: four fields now, and the old "Regenerate to update pins" advice is
+# exactly what must not happen. Plain ASCII hyphen — this line is embedded
+# verbatim into provision_minimax.sh.
+sed -i "1s/.*/# dir|clone_url|commit|group - base pins 2026-09-08, controlnet pins $(date +%F). Change one pin at a time, deliberately; never regenerate the whole file./" "$P"
+
+# Tag the 13 existing pins as base. Only data lines start with a letter.
+sed -i -E '/^[A-Za-z]/ s/$/|base/' "$P"
+
+fc_sha="$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote https://github.com/adri738/ComfyUI-H3-FunControl.git HEAD | awk '{print $1}')"
+aux_sha="$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote https://github.com/Fannovel16/comfyui_controlnet_aux.git HEAD | awk '{print $1}')"
+echo "fc=$fc_sha"
+echo "aux=$aux_sha"
+```
+
+Both must print a 40-character hex sha. If either is empty, stop — do not append a line with an empty commit. Then:
+
+```bash
+printf '%s\n' \
+    "ComfyUI-H3-FunControl|https://github.com/adri738/ComfyUI-H3-FunControl.git|${fc_sha}|controlnet" \
+    "comfyui_controlnet_aux|https://github.com/Fannovel16/comfyui_controlnet_aux.git|${aux_sha}|controlnet" \
+    >> "$P"
+cat "$P"
+```
+
+The directory name `comfyui_controlnet_aux` is load-bearing: the manifest places three preprocessor files under `custom_nodes/comfyui_controlnet_aux/ckpts/`. The last assertion in Step 2 holds the two in step.
+
+- [ ] **Step 5: Prove the 13 original pins did not move**
+
+```bash
+diff <(git show HEAD:docs/minimax-node-pins.txt | grep -vE '^#' | cut -d'|' -f1-3) \
+     <(grep -vE '^#' docs/minimax-node-pins.txt | grep '|base$' | cut -d'|' -f1-3) \
+  && echo "ok: the 13 original pins are untouched"
+```
+
+Expected: `ok: the 13 original pins are untouched`.
+
+- [ ] **Step 6: Confirm both new pins are fetchable**
+
+```bash
+grep '|controlnet$' docs/minimax-node-pins.txt | while IFS='|' read -r dir url sha group; do
+    if GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote "$url" | grep -q "^${sha}"; then
+        echo "ok   $dir"
+    else
+        echo "FAIL $dir ($sha not on $url)"
+    fi
+done
+```
+
+Expected: two `ok` lines.
+
+- [ ] **Step 7: Run everything**
+
+```bash
+bash tests/run_tests.sh
+```
+
+Expected: `75 test(s), 0 failure(s)` for the provisioning file, `9 test(s), 0 failure(s)` for the mirror file, `ALL TESTS PASSED`.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add docs/minimax-node-pins.txt tests/test_provision_minimax.sh
+git commit -m "feat: pin the two ControlNet node packs
+
+FunControl points at the user's fork, the tenth; controlnet_aux stays
+on upstream, pinned. Every pin now carries a base/controlnet group.
+The 13 existing pins are tagged, not re-resolved, so none of them moved.
+
+A test ties the preprocessor destinations in the model manifest to the
+controlnet_aux directory name here: if the two ever disagree, the files
+land where nothing looks and the pack silently re-downloads them."
+```
+
+---
+
 ### Task 6: Pod session #1 — reconnaissance and mirror
 
 **Files:**
@@ -1063,7 +1666,7 @@ bash mirror_minimax.sh
 
 The models are already mirrored and get skipped in seconds; only the JSONs upload. Expected: two `✓ ... uploaded` lines.
 
-- [ ] **Step 5: Confirm the mirror holds all 12 files**
+- [ ] **Step 5: Confirm the mirror holds all 16 files**
 
 ```bash
 curl -s -H "Authorization: Bearer ${HF_WRITE_TOKEN}" \
@@ -1071,7 +1674,7 @@ curl -s -H "Authorization: Bearer ${HF_WRITE_TOKEN}" \
   | grep -oE '"path": "[^"]*"' | sort
 ```
 
-Expected: 10 `.safetensors` plus 2 `.json`.
+Expected: 16 paths, all at the repo root — 11 `.safetensors`, one each of `.pth`, `.onnx` and `.torchscript.pt`, and the 2 `.json` workflows. The mirror is flat, so there must be no `model_patches/` prefix even though that is where the ControlNet model lives in its source repo.
 
 - [ ] **Step 6: Create the read-only token for the template**
 
@@ -1092,7 +1695,7 @@ git add docs/superpowers/specs/2026-09-08-minimax-h3-runpod-template-design.md
 git commit -m "docs: record reconnaissance answers from pod session 1
 
 Resolves nvcc availability, the image entrypoint, and the origin of the
-SAM3 nodes. Mirror is populated with all 10 models and both workflows."
+SAM3 nodes. Mirror is populated with all 14 model files and both workflows."
 ```
 
 ---
@@ -1104,8 +1707,10 @@ SAM3 nodes. Mirror is populated with all 10 models and both workflows."
 - Modify: `tests/test_provision_minimax.sh`
 
 **Interfaces:**
-- Consumes: `sanitize_requirements` (Task 3), `docs/minimax-node-pins.txt` (Task 1), the `nvcc` answer (Task 6).
-- Produces: `find_comfy_python` (echoes a python path), `NODE_PACKS` (newline string of `dir|url|sha`), `node_pack_lines`, `phase0_wait_for_comfyui`, `phase1_sageattention`, `phase2_node_packs`. `NODES_CHANGED` is set to `1` when phase 2 modified anything; Task 8's phase 5 reads it to decide whether ComfyUI needs restarting.
+- Consumes: `sanitize_requirements` (Task 3), `in_active_group` and the `active_count_with` test helper (Task 5c), `docs/minimax-node-pins.txt` with its `group` field (Tasks 1 and 5d), the `nvcc` answer (Task 6).
+- Produces: `find_comfy_python` (echoes a python path), `NODE_PACKS` (newline string of `dir|url|sha|group`), `node_pack_lines` (all 15 pins, four fields), `active_node_pack_lines` (`dir|url|sha` for the packs this template installs), `phase0_wait_for_comfyui`, `phase1_sageattention`, `phase2_node_packs`. `NODES_CHANGED` is set to `1` when phase 2 modified anything; Task 8's phase 5 reads it to decide whether ComfyUI needs restarting.
+
+**Depends on Task 5d having landed** — the embedded-pins assertion compares against a 15-line, four-field `docs/minimax-node-pins.txt`.
 
 **Forward dependency, on purpose:** `phase1_sageattention` calls `fetch_mirror_file`, which Task 8 defines. Bash resolves function names at call time, so the finished script is correct — but the script is **not runnable on a pod until Task 8 lands**. Unit tests pass in the meantime because they exercise only the pure functions. Do not try to run the script end to end between these two tasks.
 
@@ -1116,27 +1721,29 @@ Append to `tests/test_provision_minimax.sh`, immediately before the final `finis
 ```bash
 echo "-- node pack manifest --"
 
-assert_eq "13 node packs" "13" "$(node_pack_lines | grep -c .)"
-
-assert_eq "every line has three fields" "0" \
-    "$(node_pack_lines | awk -F'|' 'NF != 3' | grep -c .)"
-
-assert_eq "every commit is a 40-char sha" "0" \
-    "$(node_pack_lines | awk -F'|' '$3 !~ /^[0-9a-f]{40}$/' | grep -c .)"
-
-assert_eq "every url is a github https clone url" "0" \
-    "$(node_pack_lines | awk -F'|' '$2 !~ /^https:\/\/github\.com\/.+\.git$/' | grep -c .)"
-
-assert_eq "no duplicate directories" "0" \
-    "$(node_pack_lines | cut -d'|' -f1 | sort | uniq -d | grep -c .)"
-
-assert_eq "the nine fragile packs point at adri738 forks" "9" \
-    "$(node_pack_lines | grep -c '|https://github.com/adri738/')"
+# The pin file's own content — counts, forks, groups — is already tested by
+# the "-- node pins --" block from Task 5d. What this block adds is that the
+# copy embedded in the script matches it, and that the group filter selects
+# the right packs for each template.
 
 # The embedded copy must never drift from the reviewable source of truth.
 assert_eq "embedded pins match docs/minimax-node-pins.txt" \
     "$(grep -vE '^[[:space:]]*(#|$)' docs/minimax-node-pins.txt | sort | tr '\n' ' ')" \
     "$(node_pack_lines | sort | tr '\n' ' ')"
+
+assert_eq "base template installs 13 packs" "13" \
+    "$(active_count_with false active_node_pack_lines)"
+
+assert_eq "ControlNet template installs 15 packs" "15" \
+    "$(active_count_with true active_node_pack_lines)"
+
+assert_eq "active pack lines are dir|url|sha" "0" \
+    "$( (export MINIMAX_CONTROLNET=true; active_node_pack_lines) \
+        | awk -F'|' 'NF != 3 || $3 !~ /^[0-9a-f]+$/ || length($3) != 40' | grep -c .)"
+
+assert_eq "base template never clones a ControlNet pack" "0" \
+    "$( (export MINIMAX_CONTROLNET=false; active_node_pack_lines) \
+        | grep -cE '^(ComfyUI-H3-FunControl|comfyui_controlnet_aux)\|')"
 ```
 
 - [ ] **Step 2: Run it to make sure it fails**
@@ -1145,30 +1752,34 @@ assert_eq "embedded pins match docs/minimax-node-pins.txt" \
 bash tests/test_provision_minimax.sh
 ```
 
-Expected: FAIL — `node_pack_lines: command not found`.
+Expected: FAIL — `node_pack_lines: command not found` and `active_node_pack_lines: command not found`.
 
 - [ ] **Step 3: Add the node manifest and phases 0-2**
 
-First embed the pins. Add to `provision_minimax.sh` after `workflow_lines`, pasting the body of `docs/minimax-node-pins.txt` verbatim between the quotes (the test in Step 1 enforces that they match):
+First embed the pins. Add to `provision_minimax.sh` after `active_workflow_lines`, pasting the 15 non-comment lines of `docs/minimax-node-pins.txt` verbatim between the quotes — all four fields, group included (the test in Step 1 enforces that they match):
 
 ```bash
-# Custom-node packs: directory|clone url|pinned commit.
+# Custom-node packs: directory|clone url|pinned commit|group.
 #
 # Kept identical to docs/minimax-node-pins.txt, which is the reviewable
 # source of truth; tests/test_provision_minimax.sh fails if they drift.
-# Nine of these point at forks under adri738 so a deleted upstream cannot
+# Ten of these point at forks under adri738 so a deleted upstream cannot
 # break the template. Pinning protects against breaking changes; forking
-# protects against deletion. Both are needed.
+# protects against deletion. Both are needed. The group field works as it
+# does for models: "controlnet" packs install only when MINIMAX_CONTROLNET
+# is on.
 NODE_PACKS='
-<paste the non-comment lines of docs/minimax-node-pins.txt here>
+<paste the 15 non-comment lines of docs/minimax-node-pins.txt here>
 '
 
 node_pack_lines() {
     printf '%s\n' "$NODE_PACKS" | grep -vE '^[[:space:]]*(#|$)'
 }
+
+active_node_pack_lines() { node_pack_lines | in_active_group; }
 ```
 
-Then add the phases, after `node_pack_lines`:
+Then add the phases, after `active_node_pack_lines`. Every loop over node packs below reads `active_node_pack_lines`, never `node_pack_lines` — a base-template pod must not clone the ControlNet packs.
 
 ```bash
 setup_logging() {
@@ -1346,7 +1957,7 @@ phase2_node_packs() {
             log " ❌ commit not found: $dir @ $sha"
             FAILED+=("node checkout: $dir")
         fi
-    done <<< "$(node_pack_lines)"
+    done <<< "$(active_node_pack_lines)"
 
     log ""
     log "──── phase 2b: safe node requirements ────"
@@ -1379,7 +1990,7 @@ phase2_node_packs() {
             log " ⚠️  some optional requirements for $dir failed"
         fi
         rm -f "$tmp_req"
-    done <<< "$(node_pack_lines)"
+    done <<< "$(active_node_pack_lines)"
 
     # VideoHelperSuite needs this and it touches nothing GPU-related.
     "$PYTHON" -m pip install --no-input --prefer-binary imageio-ffmpeg >/dev/null 2>&1 \
@@ -1412,7 +2023,8 @@ git commit -m "feat: add provisioning phases 0-2
 
 Waits for the image to place ComfyUI, installs SageAttention (mirror
 wheel, else PyPI v1, with an optional background v2++ build), and clones
-all 13 node packs at pinned commits with sanitized requirements."
+the active node packs (13, or 15 with ControlNet) at pinned commits
+with sanitized requirements."
 ```
 
 ---
@@ -1423,7 +2035,7 @@ all 13 node packs at pinned commits with sanitized requirements."
 - Modify: `provision_minimax.sh`
 
 **Interfaces:**
-- Consumes: `safetensors_ok` (Task 2), `manifest_lines` / `workflow_lines` (Task 4), `NODES_CHANGED` (Task 7).
+- Consumes: `model_ok`, `controlnet_enabled`, `active_manifest_lines` and `active_workflow_lines` (Task 5c), `active_node_pack_lines` and `NODES_CHANGED` (Task 7).
 - Produces: `fetch_mirror_file <repo_path> <output_path>` — used by Task 7's phase 1 as well. `main` becomes the real entry point.
 
 Parallel downloads report their result through marker files rather than by appending to `FAILED`, because a background subshell cannot mutate its parent's array.
@@ -1487,15 +2099,20 @@ fetch_mirror_file() {
              -O "$out" "$url"
 }
 
-# download_model <filename> <subdir> <bytes> <status dir>
+# download_model <filename> <dest dir relative to COMFY_ROOT> <bytes> <status dir>
+#
+# The destination is a full relative directory, not a models/ subfolder,
+# because the ControlNet preprocessors live under custom_nodes/. Validation
+# goes through model_ok, which handles the .pth/.onnx/.pt files that have no
+# safetensors header.
 download_model() {
-    local name="$1" subdir="$2" bytes="$3" status="$4"
-    local dest="$COMFY_ROOT/models/$subdir/$name"
+    local name="$1" dest_rel="$2" bytes="$3" status="$4"
+    local dest="$COMFY_ROOT/$dest_rel/$name"
     local stage="$STAGING/${name}.part"
 
     mkdir -p "$(dirname "$dest")"
 
-    if safetensors_ok "$dest" "$bytes"; then
+    if model_ok "$dest" "$bytes"; then
         log " [SKIP] $name (already valid)"
         : > "$status/ok.$name"
         return 0
@@ -1509,7 +2126,7 @@ download_model() {
     log " • downloading $name"
     rm -f "$stage"
 
-    if fetch_mirror_file "$name" "$stage" && safetensors_ok "$stage" "$bytes"; then
+    if fetch_mirror_file "$name" "$stage" && model_ok "$stage" "$bytes"; then
         mv -f "$stage" "$dest"
         log "   ✓ $name"
         : > "$status/ok.$name"
@@ -1523,25 +2140,32 @@ download_model() {
 }
 
 phase3_models() {
-    local status name subdir bytes running=0 failures
+    local status name dest_rel bytes running=0 failures count total
 
     log ""
     log "──── phase 3: models ────"
-    log "10 files, 83,169,189,972 bytes, ${MODEL_PARALLEL} at a time"
+
+    # Counted from the manifest rather than hardcoded: 10 files on the base
+    # template, 14 with ControlNet.
+    count="$(active_manifest_lines | grep -c .)"
+    total="$(active_manifest_lines | awk -F'|' '{s += $3} END {printf "%d", s}')"
+    log "$count files, $total bytes, ${MODEL_PARALLEL} at a time"
 
     status="$STAGING/status"
     rm -rf "$status"
     mkdir -p "$status"
 
-    while IFS='|' read -r name subdir bytes; do
+    # Largest first across both groups, so the 25 GB text encoder starts at
+    # once instead of queueing behind small files.
+    while IFS='|' read -r name dest_rel bytes; do
         [[ -n "$name" ]] || continue
-        download_model "$name" "$subdir" "$bytes" "$status" &
+        download_model "$name" "$dest_rel" "$bytes" "$status" &
         running=$(( running + 1 ))
         if (( running >= MODEL_PARALLEL )); then
             wait -n 2>/dev/null || true
             running=$(( running - 1 ))
         fi
-    done <<< "$(manifest_lines)"
+    done <<< "$(active_manifest_lines | sort -t'|' -k3,3nr)"
 
     wait
 
@@ -1554,7 +2178,7 @@ phase3_models() {
         done < <(find "$status" -name 'fail.*' -exec basename {} \;)
     fi
 
-    # The HF CLI keeps its own copy under the staging dir; 77 GB is not
+    # The HF CLI keeps its own copy under the staging dir; 77-83 GB is not
     # something to store twice on a 150 GB volume.
     rm -rf "$STAGING/hf"
 }
@@ -1584,7 +2208,7 @@ phase4_workflows() {
             log " ❌ $name"
             FAILED+=("workflow: $name")
         fi
-    done <<< "$(workflow_lines)"
+    done <<< "$(active_workflow_lines)"
 }
 
 phase5_restart_and_verify() {
@@ -1660,7 +2284,7 @@ phase5_restart_and_verify() {
             log "   ✗ NOT LOADED: $dir"
             missing=$(( missing + 1 ))
         fi
-    done <<< "$(node_pack_lines)"
+    done <<< "$(active_node_pack_lines)"
 
     if (( missing > 0 )); then
         FAILED+=("phase 5: $missing node pack(s) did not load")
@@ -1693,6 +2317,14 @@ main() {
 
     log ""
     log "════ MiniMax H3 provisioning started (${1:-manual}): $(date) ════"
+
+    # Say which template this pod is before doing anything, so a log read
+    # after the fact shows at a glance whether ControlNet was meant to be here.
+    if controlnet_enabled; then
+        log "template: minimax-h3-controlnet (MINIMAX_CONTROLNET=${MINIMAX_CONTROLNET})"
+    else
+        log "template: minimax-h3 (MINIMAX_CONTROLNET=${MINIMAX_CONTROLNET:-unset}, base only)"
+    fi
 
     if [[ "${1:-}" == "--build-sage" ]]; then
         build_sage_wheel
@@ -1739,10 +2371,11 @@ Expected: `ok: sourcing is inert`.
 git add provision_minimax.sh
 git commit -m "feat: add provisioning phases 3-5
 
-Downloads all 10 models from the private mirror in parallel with staged,
-size-validated, atomic writes; places both workflows in ComfyUI's saved
-list; restarts ComfyUI only when nodes changed and verifies all 13 packs
-loaded before declaring success."
+Downloads the active models (10, or 14 with ControlNet) from the private
+mirror in parallel, largest first, with staged, validated, atomic writes;
+places the active workflows in ComfyUI's saved list; restarts ComfyUI
+only when nodes changed and verifies every active pack loaded before
+declaring success."
 ```
 
 ---
@@ -1759,22 +2392,23 @@ loaded before declaring success."
 
 - [ ] **Step 1: Write `MINIMAX_INSTRUCTIONS.md`**
 
-Match the voice and structure of `SDXL_INSTRUCTIONS.md`. It must contain:
+Match the voice and structure of `SDXL_INSTRUCTIONS.md`. One document covers **both** of the user's MiniMax templates. It must contain:
 
-1. **Deploy steps** — RunPod console → Pods → Deploy, GPU **RTX 6000 Ada (48 GB)**, template **minimax-h3**, On-Demand.
-2. **A prominent warning, near the top:** *this pod is always terminated, never stopped — download every generated video before terminating, from JupyterLab at `/workspace/runpod-slim/ComfyUI/output`.*
-3. **First-boot timing** — roughly 15-25 minutes, dominated by the 77 GB of models. Progress: Connect → JupyterLab (8888) → Terminal → `tail -f /workspace/provision_minimax.log`. Wait for `✅ MiniMax H3 provisioning finished`.
-4. **Manual fallback**, if the log file never appears after ~5 minutes:
+1. **Which template to pick, first thing.** A short table: `minimax-h3` — the main workflow, same as the creator's, ~77 GB per session; `minimax-h3-controlnet` — the main workflow *and* the ControlNet one, ~83 GB per session. One line noting that the creator's own template remains a third option and that the user's existing `RUNBOOK_MINIMAX_RUNPOD.md` is the guide for that one (spec decision 8).
+2. **Deploy steps** — RunPod console → Pods → Deploy, GPU **RTX 6000 Ada (48 GB)**, template **minimax-h3** or **minimax-h3-controlnet**, On-Demand.
+3. **A prominent warning, near the top:** *this pod is always terminated, never stopped — download every generated video before terminating, from JupyterLab at `/workspace/runpod-slim/ComfyUI/output`.*
+4. **First-boot timing** — roughly 15-25 minutes, dominated by the models. Progress: Connect → JupyterLab (8888) → Terminal → `tail -f /workspace/provision_minimax.log`. The log's second line names the template (`template: minimax-h3` or `template: minimax-h3-controlnet`) — if it names the wrong one, the `MINIMAX_CONTROLNET` variable on the template is wrong. Wait for `✅ MiniMax H3 provisioning finished`.
+5. **Manual fallback**, if the log file never appears after ~5 minutes. First `echo $MINIMAX_CONTROLNET` to confirm the terminal sees the template's variable; if it prints nothing on the ControlNet template, prefix the command with `MINIMAX_CONTROLNET=true`:
 
    ```
    cd /workspace && curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_minimax.sh -o provision_minimax.sh && bash provision_minimax.sh
    ```
 
-5. **Using it** — Connect → HTTP Service port 8188. Both workflows are already in the workflow list (sidebar → Workflows); no drag and drop needed.
-6. **The template settings table** exactly as in the spec, including the Container Start Command from Step 2 below.
-7. **The one-time SageAttention wheel upload**, quoting the command the script prints, and explaining that doing it once makes every later pod skip a 15-30 minute build.
-8. **Troubleshooting**, three symptoms with fixes: red "missing node" boxes (provisioning did not finish — check the log for ❌ lines, re-run the fallback, refresh the tab); a model missing from a dropdown (same fallback, it re-downloads only what is missing); `HF_TOKEN is not set` in the log (the template env var is missing or the token was revoked).
-9. **How to bump the pinned image or node commits** deliberately: edit the version in the template, or regenerate `docs/minimax-node-pins.txt` with the Task 1 command and re-commit.
+6. **Using it** — Connect → HTTP Service port 8188. The workflows are already in the workflow list (sidebar → Workflows); no drag and drop needed. For *how* to use them — groups, modes, prompting, what to leave enabled — point to `RUNBOOK_MINIMAX_RUNPOD.md` sections 3-5 rather than repeating them; the workflow is identical under every template. State just the two toggles that differ because of this template: `RF PATCH SAGE` **enabled** (this script does not pass `--use-sage-attention`, so the workflow group is the only route; check with `cat /workspace/runpod-slim/comfyui_args.txt`) and `RF SPEEDUP` **bypassed**.
+7. **The template settings table** exactly as in the spec, including `MINIMAX_CONTROLNET` and the Container Start Command from Step 2 below, and a sentence saying the two templates differ in that one variable and their name.
+8. **The one-time SageAttention wheel upload**, quoting the command the script prints, and explaining that doing it once makes every later pod skip a 15-30 minute build.
+9. **Troubleshooting**, four symptoms with fixes: red "missing node" boxes (provisioning did not finish — check the log for ❌ lines, re-run the fallback, refresh the tab); red ControlNet nodes on the ControlNet template specifically (the log's template line says `minimax-h3` — fix the variable, then re-run); a model missing from a dropdown (same fallback, it re-downloads only what is missing); `HF_TOKEN is not set` in the log (the template env var is missing or the token was revoked).
+10. **How to bump the pinned image or a node commit** deliberately: edit the image version in the templates; for a node pack, change that one line in `docs/minimax-node-pins.txt` and the matching line in `NODE_PACKS`, then re-commit. **Never regenerate the pin file wholesale** — that silently moves every pack at once.
 
 - [ ] **Step 2: Record the Container Start Command**
 
@@ -1844,9 +2478,16 @@ Expected: `ALL TESTS PASSED` first, then `HTTP/2 200` for the raw URL.
 
 - [ ] **Step 2: Create the RunPod template**
 
-RunPod console → Templates → New Template. Fill in exactly the table from `MINIMAX_INSTRUCTIONS.md`, including the read-only `HF_TOKEN` created in Task 6 Step 6 and `MINIMAX_HF_REPO=adri738/minimax-h3-ultra-v3`. Name it `minimax-h3`.
+RunPod console → Templates → New Template, **twice**. Fill both in exactly from the table in `MINIMAX_INSTRUCTIONS.md`, including the read-only `HF_TOKEN` created in Task 6 Step 6 and `MINIMAX_HF_REPO=adri738/minimax-h3-ultra-v3`:
 
-- [ ] **Step 3: Deploy and watch the full provisioning run**
+- `minimax-h3` with `MINIMAX_CONTROLNET=false`
+- `minimax-h3-controlnet` with `MINIMAX_CONTROLNET=true`
+
+Every other field is identical. Creating a template costs nothing; only deploying a pod does.
+
+- [ ] **Step 3: Deploy the ControlNet template and watch the full run**
+
+Validate `minimax-h3-controlnet`, not the base one: it is the strict superset, so one GPU session exercises every pack, model and workflow. The base template's narrower selection is already proven by the group-filter unit tests from Task 5c.
 
 Deploy On-Demand on an RTX 6000 Ada. Then JupyterLab (8888) → Terminal:
 
@@ -1854,18 +2495,24 @@ Deploy On-Demand on an RTX 6000 Ada. Then JupyterLab (8888) → Terminal:
 tail -f /workspace/provision_minimax.log
 ```
 
-Expected end state: `✅ MiniMax H3 provisioning finished`, with `✓ loaded:` for all 13 packs and no `❌` lines. Note the wall-clock time from boot to that line.
+Expected: the second line reads `template: minimax-h3-controlnet`; end state `✅ MiniMax H3 provisioning finished`, with `✓ loaded:` for all **15** packs and no `❌` lines. Note the wall-clock time from boot to that line.
 
-- [ ] **Step 4: Verify the models landed where ComfyUI expects them**
+- [ ] **Step 4: Verify every model landed where its node looks for it**
 
 ```bash
-cd /workspace/runpod-slim/ComfyUI/models
-du -sh text_encoders diffusion_models vae checkpoints loras vae_approx latent_upscale_models
-find . -name '*.safetensors' | wc -l
+cd /workspace/runpod-slim/ComfyUI
+du -sh models/text_encoders models/diffusion_models models/vae models/checkpoints \
+       models/loras models/vae_approx models/latent_upscale_models models/controlnet
+find models -name '*.safetensors' | wc -l
+ls -la custom_nodes/comfyui_controlnet_aux/ckpts/depth-anything/Depth-Anything-V2-Large/ \
+       custom_nodes/comfyui_controlnet_aux/ckpts/yzd-v/DWPose/ \
+       custom_nodes/comfyui_controlnet_aux/ckpts/hr16/DWPose-TorchScript-BatchSize5/
 df -h /workspace
 ```
 
-Expected: 10 safetensors files, and `/workspace` comfortably under the 150 GB limit.
+Expected: 11 safetensors under `models/` (10 base plus the ControlNet union model in `models/controlnet/`); the three preprocessor files present in their `ckpts/` folders at their exact sizes; `/workspace` comfortably under the 150 GB limit.
+
+Whether `comfyui_controlnet_aux` actually *uses* those three files can only be seen once a ControlNet generation has run — the preprocessors load on first use, not at boot. That check is in Step 8.
 
 - [ ] **Step 5: Test idempotence**
 
@@ -1904,6 +2551,17 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv -l 5
 ```
 
 Record the peak against the 48 GB card — it settles whether the hardware guidance in the spec is right.
+
+Then the ControlNet run. Load `MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json` and confirm first that it opens with **no red nodes** — `H3FunControlLoader`, `H3FunControlApply`, `DWPreprocessor` and `DepthAnythingV2Preprocessor` must all resolve, and the loader's dropdown must list `minimax_h3_fun_controlnet_union_pruned_bf16.safetensors`. Run a short clip with one pose or depth reference, with the same two toggles as above.
+
+Now — after the preprocessors have actually loaded — confirm they used the pre-placed files rather than fetching their own:
+
+```bash
+grep -iE 'Failed to find .*ckpts|Downloading from huggingface' /workspace/provision_minimax.log || echo "ok: controlnet_aux downloaded nothing itself"
+grep -i 'onnxruntime' /workspace/provision_minimax.log
+```
+
+The first must print the `ok` line; any hit means a preprocessor file sits at the wrong path and will be re-fetched every session. (ComfyUI writes to this log because phase 5 restarted it on first boot.) The second answers the spec's open question: a warning that onnxruntime lacks acceleration providers means DWPose runs on CPU. It still works, only slowly — record it, do not fix it here.
 
 - [ ] **Step 9: Save the output, then terminate**
 
