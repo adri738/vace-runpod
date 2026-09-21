@@ -1690,6 +1690,79 @@ now ends the run after the current step."
 
 ---
 
+### Task 5f: Point both scripts at the dedicated mirror account
+
+> Added 2026-09-21. The mirror lives on a dedicated HuggingFace account, `adri73782` — see spec decision 1. Both scripts still default to `adri738/minimax-h3-ultra-v3`, a name taken from the user's GitHub account on the assumption that her HuggingFace name matched; it does not, and no HF user `adri738` exists. Templates set `MINIMAX_HF_REPO` explicitly, so this only bites a run that omits it — such as the manual fallback — but that is exactly the run where nobody is watching.
+
+**Files:**
+- Modify: `provision_minimax.sh` — the `MIRROR_REPO` default
+- Modify: `mirror_minimax.sh` — the `MIRROR_REPO` default
+- Modify: `tests/test_mirror_minimax.sh` — add a `-- default mirror repo --` block before `finish`
+
+**Interfaces:**
+- Produces: `MIRROR_REPO` defaulting to `adri73782/minimax-h3-ultra-v3` in both scripts, pinned by a test.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_mirror_minimax.sh`, immediately before `finish`:
+
+```bash
+echo "-- default mirror repo --"
+
+# The mirror lives on a dedicated HuggingFace account, adri73782 — not the
+# GitHub name adri738 the first draft assumed. Each script carries the
+# default on its own, since each is fetched standalone, so both are pinned
+# here to the same value. Sourced in a subshell with MINIMAX_HF_REPO unset
+# so that the default, not an inherited override, is what gets read.
+default_repo_of() { ( unset MINIMAX_HF_REPO; source "$1"; printf '%s' "$MIRROR_REPO" ); }
+
+assert_eq "provisioning defaults to the dedicated mirror account" \
+    "adri73782/minimax-h3-ultra-v3" "$(default_repo_of provision_minimax.sh)"
+
+assert_eq "mirror defaults to the dedicated mirror account" \
+    "adri73782/minimax-h3-ultra-v3" "$(default_repo_of mirror_minimax.sh)"
+```
+
+- [ ] **Step 2: Run it to make sure it fails**
+
+```bash
+bash tests/test_mirror_minimax.sh
+```
+
+Expected: both new assertions fail, each reporting `actual: [adri738/minimax-h3-ultra-v3]`.
+
+- [ ] **Step 3: Change the two defaults**
+
+```bash
+sed -i 's#adri738/minimax-h3-ultra-v3#adri73782/minimax-h3-ultra-v3#' provision_minimax.sh mirror_minimax.sh
+grep -n 'MIRROR_REPO=' provision_minimax.sh mirror_minimax.sh
+grep -rn 'adri738/minimax' provision_minimax.sh mirror_minimax.sh tests/ || echo "ok: no stale repo id left"
+```
+
+The pattern includes the repo name on purpose: it must not touch `github.com/adri738/...` URLs, which are correct — GitHub is where the user *is* `adri738`.
+
+- [ ] **Step 4: Run everything**
+
+```bash
+bash tests/run_tests.sh
+```
+
+Expected: `16 test(s), 0 failure(s)` for the mirror file, `75 test(s), 0 failure(s)` for the provisioning file, `ALL TESTS PASSED`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add provision_minimax.sh mirror_minimax.sh tests/test_mirror_minimax.sh
+git commit -m "fix: default both scripts to the adri73782 mirror account
+
+The mirror moved to a dedicated HuggingFace account after the user's
+main account ran out of private storage. Its name is adri73782; the
+old default, adri738, was her GitHub name and exists nowhere on
+HuggingFace. A test now pins both scripts to the same default."
+```
+
+---
+
 ### Task 6: Pod session #1 — reconnaissance and mirror
 
 **Files:**
