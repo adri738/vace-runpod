@@ -1585,11 +1585,11 @@ land where nothing looks and the pack silently re-downloads them."
 **Interfaces:**
 - Produces: answers to the three open questions, and a populated mirror. Task 7's phase 1 branches on the `nvcc` answer; the Container Start Command in Task 9 depends on the entrypoint answer.
 
-This is the first of two paid pod sessions. Both jobs are done in one session on purpose — reconnaissance takes 5 minutes, the mirror takes 15-25, and a CPU-only pod costs about $0.10/hour.
+This is the first of two paid pod sessions. Both jobs are done in one session on purpose — reconnaissance takes 5 minutes, the mirror 20-30.
 
 - [ ] **Step 1: Deploy a reconnaissance pod**
 
-RunPod console → Pods → Deploy. Use a **CPU-only pod** (cheapest available). Set:
+RunPod console → Pods → Deploy. **Set Additional Filters → CUDA Versions → 13.0 first**, then pick the **cheapest GPU** offered. (Amended 2026-09-21: an earlier draft said CPU-only. It is unverified that this image fully initialises ComfyUI under `/workspace/runpod-slim` without a GPU, and the reconnaissance is worthless if it does not. A CUDA 13 image also needs a host whose driver supports CUDA 13, which is what the filter guarantees — the same filter the user already applies for the creator's template. The cheapest such GPU costs cents more per hour than a CPU pod.) Set:
 
 - Container Image: `runpod/comfyui:1.4.7-cuda13.0`
 - Container Disk: 25 GB
@@ -1612,7 +1612,11 @@ cat /proc/1/cmdline | tr '\0' ' '; echo
 
 echo
 echo "=== Q3: where do the SAM3 nodes come from? ==="
-grep -rl "SAM3_VideoTrack" / --include="*.py" 2>/dev/null | head -5 || echo "NOT FOUND ANYWHERE"
+# Scoped to the ComfyUI tree: grepping / walks /proc and every mount and
+# can take many minutes. The result is captured first because `head`
+# always succeeds, so a bare `|| echo` after it would never fire.
+r="$(grep -rl "SAM3_VideoTrack" /workspace/runpod-slim --include="*.py" 2>/dev/null | head -5)"
+echo "${r:-NOT FOUND ANYWHERE}"
 
 echo
 echo "=== supporting facts ==="
@@ -1630,7 +1634,7 @@ Record every answer. Three consequences:
 
 - **`NO NVCC`** → Task 7 phase 1 keeps only the v1 path; delete the background-build branch rather than shipping dead code.
 - **`NO /start.sh`** → the Container Start Command in Task 9 must `exec` whatever `/proc/1/cmdline` reported instead.
-- **`NOT FOUND ANYWHERE`** for SAM3 → the inpainting half of the workflow needs a 14th node pack that the creator's installer does not clone. Note it, finish the rest of the plan, and resolve it in Task 10 by loading the workflow and reading which node types ComfyUI reports as missing.
+- **`NOT FOUND ANYWHERE`** for SAM3 → the inpainting half of the workflow needs a 16th node pack that the creator's installer does not clone. Note it, finish the rest of the plan, and resolve it in Task 10 by loading the workflow and reading which node types ComfyUI reports as missing.
 
 - [ ] **Step 3: Run the mirror**
 
@@ -1643,13 +1647,28 @@ JupyterLab's `/workspace` panel.
 https://raw.githubusercontent.com/adri738/vace-runpod/minimax-h3-template/mirror_minimax.sh -o
 mirror_minimax.sh` works instead. Either route is fine.)
 
-Then, in the pod terminal:
+Then, in the pod terminal. First, keep HuggingFace's caches on the 60 GB volume rather than the 25 GB container disk — the Xet backend keeps a chunk cache of up to ~10 GB, and the largest file is 27 GB — and make sure the `hf` CLI exists, installing it into ComfyUI's own venv if the image lacks it:
 
 ```bash
 cd /workspace
-export HF_WRITE_TOKEN=hf_xxxxxxxx   # paste a WRITE token from huggingface.co/settings/tokens
-bash mirror_minimax.sh
+export HF_HOME=/workspace/.cache/huggingface
+export HF_XET_CACHE=/workspace/.cache/huggingface/xet
+if ! command -v hf >/dev/null 2>&1; then
+    PY="$(ls /workspace/runpod-slim/ComfyUI/.venv*/bin/python /workspace/runpod-slim/ComfyUI/venv/bin/python 2>/dev/null | head -1)"
+    "$PY" -m pip install -q -U huggingface_hub
+    export PATH="$(dirname "$PY"):$PATH"
+fi
+command -v hf && echo "hf ready"
 ```
+
+Then, in the same terminal:
+
+```bash
+export HF_WRITE_TOKEN=hf_xxxxxxxx   # paste a WRITE token from huggingface.co/settings/tokens
+bash /workspace/mirror_minimax.sh
+```
+
+(`mirror_minimax.sh` does not set `HF_HOME` itself yet; Task 8 adds that to both scripts. Until then the export above is load-bearing.)
 
 Expected final line: `✅ mirror complete`. If any file fails, re-run — it resumes.
 
@@ -2033,6 +2052,7 @@ with sanitized requirements."
 
 **Files:**
 - Modify: `provision_minimax.sh`
+- Modify: `mirror_minimax.sh` — only the two `HF_HOME` / `HF_XET_CACHE` exports, see Step 2b
 
 **Interfaces:**
 - Consumes: `model_ok`, `controlnet_enabled`, `active_manifest_lines` and `active_workflow_lines` (Task 5c), `active_node_pack_lines` and `NODES_CHANGED` (Task 7).
@@ -2315,6 +2335,13 @@ Replace the `main` function created in Task 2 with:
 main() {
     setup_logging
 
+    # Keep HuggingFace's caches on the 150 GB volume, not the 25 GB container
+    # disk: the Xet backend keeps a chunk cache of up to ~10 GB, and the
+    # largest model is 27 GB. Exported here, inside main, so that sourcing
+    # the script for tests still changes nothing.
+    export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
+    export HF_XET_CACHE="${HF_XET_CACHE:-$HF_HOME/xet}"
+
     log ""
     log "════ MiniMax H3 provisioning started (${1:-manual}): $(date) ════"
 
@@ -2341,12 +2368,28 @@ main() {
 }
 ```
 
+- [ ] **Step 2b: Give the mirror script the same cache location**
+
+`mirror_minimax.sh` has the same exposure: it downloads files of up to 27 GB, and without `HF_HOME` the Xet chunk cache lands on the 25 GB container disk. In its `main`, immediately after the `HF_WRITE_TOKEN` check, add:
+
+```bash
+    # Keep HuggingFace's caches on the /workspace volume, not the 25 GB
+    # container disk: the Xet backend keeps a chunk cache of up to ~10 GB.
+    export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
+    export HF_XET_CACHE="${HF_XET_CACHE:-$HF_HOME/xet}"
+```
+
+Nothing else in `mirror_minimax.sh` changes. (The one-time mirror run in Task 6 exports these by hand, because it happens before this task lands.)
+
 - [ ] **Step 3: Run the tests and syntax check**
 
 ```bash
 bash tests/run_tests.sh
-bash -n provision_minimax.sh && echo "syntax ok"
+bash -n provision_minimax.sh && bash -n mirror_minimax.sh && echo "syntax ok"
+grep -c 'HF_HOME=' provision_minimax.sh mirror_minimax.sh
 ```
+
+The last line must report `1` for each file: the export lives inside `main`, once.
 
 Expected: `ALL TESTS PASSED` and `syntax ok`.
 
