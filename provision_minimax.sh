@@ -630,7 +630,20 @@ phase5_restart_and_verify() {
     log ""
     log "──── phase 5: restart and verify ────"
 
-    if [[ "${NODES_CHANGED:-0}" != "1" ]] && pgrep -f "$pattern" >/dev/null 2>&1; then
+    # Restart is needed when nodes changed OR when ComfyUI is running but
+    # has not loaded the packs we installed (e.g., a prior run installed them
+    # but crashed before the restart).  Check by asking ComfyUI's API for its
+    # loaded node types — if a signature pack is missing, force the restart.
+    local needs_restart="${NODES_CHANGED:-0}"
+    if [[ "$needs_restart" != "1" ]] && pgrep -f "$pattern" >/dev/null 2>&1; then
+        local probe_url="http://127.0.0.1:8188/object_info/MiniMaxH3FlowEditVideoNode"
+        if ! curl -sf "$probe_url" >/dev/null 2>&1; then
+            log "• ComfyUI is running but has not loaded the MiniMax nodes — restarting"
+            needs_restart=1
+        fi
+    fi
+
+    if [[ "$needs_restart" != "1" ]] && pgrep -f "$pattern" >/dev/null 2>&1; then
         log "• no node changes and ComfyUI is running — no restart needed"
         return 0
     fi
