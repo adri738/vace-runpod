@@ -7,6 +7,11 @@ image** and installs everything the VACE image-to-video workflow needs
 automatically at boot. There is **no "update ComfyUI" step — never click
 Update in the Manager.**
 
+This repo also provisions two other templates the same way: `sdxl-forge`
+for Stable Diffusion (see `SDXL_INSTRUCTIONS.md`), and `minimax-h3` /
+`minimax-h3-controlnet` for MiniMax H3 video generation (see
+`MINIMAX_INSTRUCTIONS.md`).
+
 ## Normal use
 
 1. RunPod console → **Pods** → **Deploy**. Pick a GPU with **at least 24 GB
