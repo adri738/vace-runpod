@@ -18,7 +18,7 @@
 - ComfyUI root on the pod: `/workspace/runpod-slim/ComfyUI`.
 - Volume Disk 150 GB, Container Disk 25 GB, mount path `/workspace`, HTTP ports `8188,8888`, TCP `22`.
 - GPU: RTX 6000 Ada (48 GB VRAM).
-- Private mirror repo: `adri738/minimax-h3-ultra-v3`.
+- Private mirror repo: `adri73782/minimax-h3-ultra-v3`.
 - Public GitHub repo: `adri738/vace-runpod`, branch `minimax-h3-template` during development; scripts must reach `main` before a pod can fetch them.
 - **The two workflow JSONs are paid content and must NEVER be committed to the public GitHub repo.** They travel only through the private HF mirror. `.gitignore` must block them.
 - The pod only ever holds a **read-only, single-repo** HF token. The write token is used by hand, once, and never stored in the template.
@@ -353,7 +353,7 @@ Create `provision_minimax.sh`:
 set -uo pipefail
 
 COMFY_ROOT="${COMFY_ROOT:-/workspace/runpod-slim/ComfyUI}"
-MIRROR_REPO="${MINIMAX_HF_REPO:-adri738/minimax-h3-ultra-v3}"
+MIRROR_REPO="${MINIMAX_HF_REPO:-adri73782/minimax-h3-ultra-v3}"
 LOG="${MINIMAX_LOG:-/workspace/provision_minimax.log}"
 STAGING="${MINIMAX_STAGING:-/workspace/.minimax_staging}"
 MODEL_PARALLEL="${MINIMAX_PARALLEL:-3}"
@@ -725,7 +725,7 @@ Create `mirror_minimax.sh`:
 set -uo pipefail
 
 SOURCE_REPO="${MINIMAX_SOURCE_REPO:-Aitrepreneur/FLX}"
-MIRROR_REPO="${MINIMAX_HF_REPO:-adri738/minimax-h3-ultra-v3}"
+MIRROR_REPO="${MINIMAX_HF_REPO:-adri73782/minimax-h3-ultra-v3}"
 WORK="${MINIMAX_MIRROR_WORK:-/workspace/.minimax_mirror}"
 
 FAILED=()
@@ -1803,7 +1803,7 @@ The models are already mirrored and get skipped in seconds; only the JSONs uploa
 
 ```bash
 curl -s -H "Authorization: Bearer ${HF_WRITE_TOKEN}" \
-  "https://huggingface.co/api/models/adri738/minimax-h3-ultra-v3/tree/main?recursive=1" \
+  "https://huggingface.co/api/models/adri73782/minimax-h3-ultra-v3/tree/main?recursive=1" \
   | grep -oE '"path": "[^"]*"' | sort
 ```
 
@@ -1812,7 +1812,7 @@ Expected: 16 paths, all at the repo root — 11 `.safetensors`, one each of `.pt
 - [ ] **Step 6: Create the read-only token for the template**
 
 At https://huggingface.co/settings/tokens create a **fine-grained** token with:
-- Repository access: **only** `adri738/minimax-h3-ultra-v3`
+- Repository access: **only** `adri73782/minimax-h3-ultra-v3`
 - Permissions: **read only**
 
 Save it — Task 9's template configuration needs it. Do not reuse the write token.
@@ -2635,7 +2635,7 @@ Expected: `ALL TESTS PASSED` first, then `HTTP/2 200` for the raw URL.
 
 - [ ] **Step 2: Create the RunPod template**
 
-RunPod console → Templates → New Template, **twice**. Fill both in exactly from the table in `MINIMAX_INSTRUCTIONS.md`, including the read-only `HF_TOKEN` created in Task 6 Step 6 and `MINIMAX_HF_REPO=adri738/minimax-h3-ultra-v3`:
+RunPod console → Templates → New Template, **twice**. Fill both in exactly from the table in `MINIMAX_INSTRUCTIONS.md`, including the read-only `HF_TOKEN` created in Task 6 Step 6 and `MINIMAX_HF_REPO=adri73782/minimax-h3-ultra-v3`:
 
 - `minimax-h3` with `MINIMAX_CONTROLNET=false`
 - `minimax-h3-controlnet` with `MINIMAX_CONTROLNET=true`

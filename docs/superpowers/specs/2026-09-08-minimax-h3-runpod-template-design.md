@@ -40,6 +40,13 @@ proven pattern as the existing VACE and SDXL templates in this repo — a
    private repo on the user's HF account — 14 files across both groups (see decision 9).
    The free HF plan includes 100 GB of private storage; the full mirror is 89.08 GB
    (82.97 GiB), which fits with ~11 GB of headroom. No paid plan required.
+   **The mirror lives on a dedicated HF account, `adri73782`**, created for it on
+   2026-09-21. The first mirror attempt went to her main account `marix64`, whose other
+   private repos already used about half of that quota; the upload hit "Private repository
+   storage limit reached" after 48 GB. The ~11 GB headroom therefore only holds while this
+   account carries nothing but the mirror and the SageAttention wheel. Her usernames differ
+   by service: GitHub `adri738`, HuggingFace `adri73782` (mirror) and `marix64` (everything
+   else).
 2. **Base image: official `runpod/comfyui`, pinned version.** Not the creator's image.
    The official image already publishes a CUDA 13 tag, so nothing is lost on that axis.
 3. **Workflow JSONs travel through the private HF repo,** and the script places them in
@@ -212,7 +219,7 @@ Run once from a cheap CPU-only RunPod pod (or the first GPU pod), never at boot.
 
 1. Requires a **write-scoped** HF token supplied interactively or via env var. It is used
    only here and is never stored in the template or the repo.
-2. Creates the private HF repo (`adri738/minimax-h3-ultra-v3` by default) if absent.
+2. Creates the private HF repo (`adri73782/minimax-h3-ultra-v3` by default) if absent.
 3. For each of the 14 files, both groups: download from that file's own source repo and
    path, verify size and hash match, upload to the private repo, and delete the local copy
    before moving to the next file so the pod disk never needs to hold all 83 GB at once.
@@ -282,7 +289,7 @@ scripts.
 | Expose HTTP Ports | `8188` (ComfyUI), `8888` (JupyterLab) |
 | Expose TCP Ports | `22` |
 | Env `HF_TOKEN` | fine-grained token, **read-only, scoped to the private mirror repo only** |
-| Env `MINIMAX_HF_REPO` | `adri738/minimax-h3-ultra-v3` (default name; any private repo id works) |
+| Env `MINIMAX_HF_REPO` | `adri73782/minimax-h3-ultra-v3` (default name; any private repo id works) |
 | Env `MINIMAX_CONTROLNET` | `false` on `minimax-h3`, `true` on `minimax-h3-controlnet` |
 
 The table describes both RunPod templates. They are identical in every row except the
