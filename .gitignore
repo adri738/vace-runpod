@@ -6,3 +6,6 @@ instructions_aitrepeneur_comfyui_videoVACE.txt
 # Debugging artifacts from the old pod
 comfyui_error.log
 error_screenshot.png
+
+# Paid Patreon content — lives only in the private HF mirror, never here
+MINIMAX_*WORKFLOW*.json
