@@ -169,6 +169,13 @@ upload_workflows() {
 main() {
     local name bytes sha src_repo src_path
 
+    # hf is a Python program: it catches Ctrl+C and exits with an ordinary
+    # error status, so bash would record one failed file and carry on to the
+    # next 20 GB download. With a trap, INT (Ctrl+C) and TERM (pkill, pod
+    # shutdown) stop the whole run once the current step returns. A re-run
+    # resumes: files already mirrored at the right size are skipped.
+    trap 'log ""; log "interrupted — stopping. Run the script again to resume."; exit 130' INT TERM
+
     if [[ -z "${HF_WRITE_TOKEN:-}" ]]; then
         log "HF_WRITE_TOKEN is not set."
         log "Create a write token at https://huggingface.co/settings/tokens, then:"

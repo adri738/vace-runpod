@@ -51,4 +51,55 @@ assert_eq "same workflow filenames" \
     "$(workflow_lines | cut -d'|' -f1 | sort | tr '\n' ' ')" \
     "$(mirror_workflow_lines | sort | tr '\n' ' ')"
 
+echo "-- interrupt --"
+
+# What this fix is really about is INT: hf catches Ctrl+C and returns
+# normally, so without a trap bash never stops. That exact situation cannot
+# be replayed here — bash starts background jobs with SIGINT ignored, and a
+# signal ignored on entry cannot be trapped. So INT coverage is pinned by
+# reading the trap's signal list, and the stopping behaviour is proven with
+# TERM, which the same trap handles identically.
+assert_eq "main traps both INT and TERM" "1" \
+    "$(sed -n '/^main() {/,/^}/p' mirror_minimax.sh | grep -cE '^[[:space:]]*trap .* INT TERM$')"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+calls="$TMP/calls.log"
+: > "$calls"
+
+(
+    require_tools()    { return 0; }
+    hf()               { return 0; }
+    copy_one()         { echo "copy $1" >> "$calls"; sleep 2; }
+    upload_workflows() { echo "workflows" >> "$calls"; }
+    export HF_WRITE_TOKEN=test-only
+    WORK="$TMP/work"
+    main
+) > "$TMP/out.log" 2>&1 &
+run_pid=$!
+
+# Wait until the first file is being copied, so the signal lands mid-run
+# rather than racing process start-up, which is slow on Windows.
+for _ in $(seq 1 100); do
+    grep -q '^copy ' "$calls" && break
+    sleep 0.1
+done
+kill -TERM "$run_pid"
+wait "$run_pid"
+run_status=$?
+
+# 130 comes only from the trap. Without it, TERM's default action kills the
+# shell outright and the status is 143 — which is also why the two counts
+# below pass either way: they guard against a trap that forgets to exit.
+assert_eq "interrupted run exits 130, via the trap" "130" "$run_status"
+
+assert_eq "no further file starts after the interrupt" "1" \
+    "$(grep -c '^copy ' "$calls")"
+
+assert_eq "workflows are not uploaded after the interrupt" "0" \
+    "$(grep -c '^workflows' "$calls")"
+
+assert_eq "the stop is announced" "1" \
+    "$(grep -c 'interrupted' "$TMP/out.log")"
+
 finish
