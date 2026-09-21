@@ -36,25 +36,29 @@ proven pattern as the existing VACE and SDXL templates in this repo — a
 
 ## Decisions made with the user
 
-1. **Model source: private HuggingFace mirror.** All 10 files are copied once to a
-   private repo on the user's HF account. The free HF plan includes 100 GB of private
-   storage; 77.46 GB fits with ~22 GB of headroom. No paid plan required.
+1. **Model source: private HuggingFace mirror.** Every model file is copied once to a
+   private repo on the user's HF account — 14 files across both groups (see decision 9).
+   The free HF plan includes 100 GB of private storage; the full mirror is 89.08 GB
+   (82.97 GiB), which fits with ~11 GB of headroom. No paid plan required.
 2. **Base image: official `runpod/comfyui`, pinned version.** Not the creator's image.
    The official image already publishes a CUDA 13 tag, so nothing is lost on that axis.
 3. **Workflow JSONs travel through the private HF repo,** and the script places them in
    `ComfyUI/user/default/workflows/` so they appear in ComfyUI's saved-workflow list.
    They must never be committed to the public GitHub repo.
-4. **Fork the 9 single-maintainer node packs** to the user's GitHub account. The 4 large,
+4. **Fork the single-maintainer node packs** to the user's GitHub account — 9 in group
+   `base`, plus `ComfyUI-H3-FunControl` in group `controlnet`, 10 in all. The large,
    well-established packs are cloned from upstream at a pinned commit.
 5. **Pod lifecycle: always terminate, never stop.** The user does not want to pay for
    idle volume storage. Every session re-downloads the models. This makes download
    throughput a first-class concern and means nothing may be cached on `/workspace`
    between sessions.
-6. **All 10 models download every time — no partial profile.** An earlier "lite" profile
-   was considered and rejected: the user uses the reference-to-video mode, so `ref2va`
-   (19.53 GB) cannot be skipped, which leaves only SAM3 and the T1 image VAE as
-   candidates — 6.5 GB out of 77.46 GB. Not worth an env var that can silently leave a
-   model missing months later.
+6. **All 10 base models download every time — no partial profile within `base`.** An
+   earlier "lite" profile was considered and rejected: the user uses the
+   reference-to-video mode, so `ref2va` (19.53 GB) cannot be skipped, which leaves only
+   SAM3 and the T1 image VAE as candidates — 6.5 GB out of 77.46 GB. Not worth an env var
+   that can silently leave a model missing months later. Decision 9's ControlNet toggle
+   does not reopen this: it only ever *adds* a group on top of a complete `base`, so no
+   setting can leave the main workflow short of a model.
 7. **SageAttention in two stages** (see Architecture) rather than depending on the
    creator's prebuilt image.
 8. **Additive, not a replacement.** The user keeps using the creator's template as a
@@ -64,6 +68,15 @@ proven pattern as the existing VACE and SDXL templates in this repo — a
    The workflow itself is identical under both, so `MINIMAX_INSTRUCTIONS.md` covers
    deploying and operating this template and points to the runbook for how to use the
    workflow, rather than duplicating it.
+9. **Two own templates from one script.** The user wants her own MiniMax setup in two
+   flavours, alongside the creator's: `minimax-h3`, without ControlNet (matching the
+   creator's workflow), and `minimax-h3-controlnet`, which adds ControlNet. Both run the
+   same `provision_minimax.sh` and read the same mirror; the only difference between the
+   two RunPod templates is the env var `MINIMAX_CONTROLNET` (`false` / `true`). Every
+   pack, model and workflow carries a group tag, `base` or `controlnet`, and the script
+   installs `base` always and `controlnet` only when the variable is on. One script
+   rather than two, so a fix lands in both at once and they cannot drift apart. The
+   ControlNet template is a strict superset: it also carries the main workflow.
 
 ## Architecture
 
@@ -71,11 +84,12 @@ Three new files in the existing public repo `adri738/vace-runpod`:
 
 | File | Role |
 |---|---|
-| `mirror_minimax.sh` | Run **once, ever**. Populates the private HF mirror. |
-| `provision_minimax.sh` | Run on **every boot**. Idempotent. Installs everything. |
-| `MINIMAX_INSTRUCTIONS.md` | User-facing guide, sibling of `SDXL_INSTRUCTIONS.md`. |
+| `mirror_minimax.sh` | Run **once, ever**. Populates the private HF mirror with everything both templates need. |
+| `provision_minimax.sh` | Run on **every boot**. Idempotent. Installs the groups the template asks for. |
+| `MINIMAX_INSTRUCTIONS.md` | User-facing guide for both MiniMax templates, sibling of `SDXL_INSTRUCTIONS.md`. |
 
-No new GitHub repo. The existing repo already hosts two templates; this is the third.
+No new GitHub repo. The repo already hosts the VACE, SDXL and LLM-pod templates; these
+two MiniMax templates join them, driven by one script.
 
 ### SageAttention strategy
 
@@ -105,7 +119,8 @@ SageAttention is a secondary factor.
 
 ### Model inventory
 
-Sizes measured 2026-09-08 via HTTP HEAD against `Aitrepreneur/FLX`.
+Group `base` — installed by both templates. Sizes measured 2026-09-08 via HTTP HEAD
+against `Aitrepreneur/FLX`.
 
 | File | Size | ComfyUI folder |
 |---|---|---|
@@ -121,12 +136,42 @@ Sizes measured 2026-09-08 via HTTP HEAD against `Aitrepreneur/FLX`.
 | `taeh3.safetensors` | 0.01 GB | `vae_approx/` |
 | **Total** | **77.46 GB** | |
 
-The two workflow JSONs the user keeps are `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` and
-`MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json`. (An earlier turbo variant was also
-in scope; the user has since discarded it. The turbo LoRA above is still mirrored —
-it is selectable from within the main workflow and is not tied to that file.) Both
-reference the same node types and the same 9 model filenames; `taeh3.safetensors` is
-picked up automatically by ComfyUI for latent previews.
+Group `controlnet` — installed only by `minimax-h3-controlnet`. Sizes and sha256 read from
+the HuggingFace tree API on 2026-09-21. These come from four different source repos, none
+of them the creator's:
+
+| File | Bytes | Source repo (path) | Destination, relative to the ComfyUI root |
+|---|---|---|---|
+| `minimax_h3_fun_controlnet_union_pruned_bf16.safetensors` | 4,222,169,456 | `Comfy-Org/MiniMax-H3` (`model_patches/`) | `models/controlnet/` |
+| `depth_anything_v2_vitl.pth` | 1,341,395,338 | `depth-anything/Depth-Anything-V2-Large` | `custom_nodes/comfyui_controlnet_aux/ckpts/depth-anything/Depth-Anything-V2-Large/` |
+| `yolox_l.onnx` | 216,746,733 | `yzd-v/DWPose` | `custom_nodes/comfyui_controlnet_aux/ckpts/yzd-v/DWPose/` |
+| `dw-ll_ucoco_384_bs5.torchscript.pt` | 135,059,124 | `hr16/DWPose-TorchScript-BatchSize5` | `custom_nodes/comfyui_controlnet_aux/ckpts/hr16/DWPose-TorchScript-BatchSize5/` |
+| **Total** | **5.51 GB** | | |
+
+The destinations are not arbitrary and both were verified in source. The FunControl loader
+lists and loads models via `folder_paths` category `"controlnet"`, so its model lives in
+`models/controlnet/` even though HuggingFace stores it under `model_patches/`.
+`comfyui_controlnet_aux` looks for `ckpts/<hf_repo_id>/<file>` before downloading anything,
+so pre-placing the three preprocessor files there makes it use them with no network access.
+Mirroring them, rather than letting the pack fetch them, keeps decision 1's independence and
+avoids a re-fetch every session, since pods are always terminated.
+
+Three of these four are **not safetensors** (`.pth`, `.onnx`, `.pt`), so the header check
+described under error handling applies only to `.safetensors` files; the others are
+validated by exact byte size alone, which still rejects every truncated download.
+
+Totals: `base` 77.46 GB (83,169,189,972 bytes); both groups 82.97 GB (89,084,560,623 bytes,
+89.08 GB decimal) — still inside the 100 GB free private tier.
+
+Workflows, also tagged by group: `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` is `base`;
+`MINIMAX_H3_ULTRA_WORKFLOW-V3_CONTROLNET.json` is `controlnet`. So `minimax-h3` gets the main
+workflow and `minimax-h3-controlnet` gets both. (An earlier turbo workflow was in scope;
+the user discarded it. The turbo LoRA above is still mirrored — it is selectable from within
+the main workflow and is not tied to that file.) The main workflow references 9 of the base
+model filenames; `taeh3.safetensors` is picked up automatically by ComfyUI for latent
+previews. The ControlNet workflow additionally references the four `controlnet` files and
+the node types `H3FunControlLoader`, `H3FunControlApply`, `DWPreprocessor` and
+`DepthAnythingV2Preprocessor`.
 
 ### Node packs
 
@@ -152,6 +197,15 @@ Every pack — forked or not — is pinned to an explicit commit, matching the p
 already used in `provision_vace.sh`. Pinning protects against breaking changes; forking
 protects against deletion. Both are needed.
 
+All 13 packs above are group `base`. Group `controlnet` adds two more, by the same rule:
+
+| Pack | Treatment |
+|---|---|
+| `wyzborrero/ComfyUI-H3-FunControl` | Single maintainer → **forked** to the user's account (the tenth fork) |
+| `Fannovel16/comfyui_controlnet_aux` | Large, established → cloned from upstream at a pinned commit |
+
+That makes 15 packs in all, 10 of them forks.
+
 ## `mirror_minimax.sh` requirements
 
 Run once from a cheap CPU-only RunPod pod (or the first GPU pod), never at boot.
@@ -159,9 +213,12 @@ Run once from a cheap CPU-only RunPod pod (or the first GPU pod), never at boot.
 1. Requires a **write-scoped** HF token supplied interactively or via env var. It is used
    only here and is never stored in the template or the repo.
 2. Creates the private HF repo (`adri738/minimax-h3-ultra-v3` by default) if absent.
-3. For each of the 10 files: download from `Aitrepreneur/FLX`, upload to the private repo,
-   verify size and hash match, delete the local copy before moving to the next file so the
-   pod disk never needs to hold all 77 GB at once.
+3. For each of the 14 files, both groups: download from that file's own source repo and
+   path, verify size and hash match, upload to the private repo, and delete the local copy
+   before moving to the next file so the pod disk never needs to hold all 83 GB at once.
+   The mirror mirrors everything regardless of group — it is the single source for both
+   templates. It is flat: every file sits at the repo root under its own filename, which
+   is unique across all 14.
 4. Skips files already present in the mirror with a matching size — safe to re-run after
    an interruption.
 5. Uploads the two workflow JSONs when they are present locally (the user uploads these
@@ -184,25 +241,32 @@ a summary, matching `provision_vace.sh` and `provision_sdxl.sh`.
 `pip install sageattention` (v1) and, if `nvcc` exists, kick off the v2++ compile in the
 background. ComfyUI must remain usable throughout.
 
-**Phase 2 — node packs.** Clone or update all 13 packs at their pinned commits. Install
+Which groups are active comes from `MINIMAX_CONTROLNET`: `true`, `1` or `yes`
+(case-insensitive) activates `controlnet` on top of `base`; anything else, including
+unset, means `base` only. The safe default is the smaller install.
+
+**Phase 2 — node packs.** Clone or update the active packs (13, or 15 with ControlNet) at their pinned commits. Install
 each pack's Python requirements with a **sanitized** requirements file: torch, torchvision,
 torchaudio, xformers, triton, sageattention, numpy, transformers, tokenizers,
 huggingface-hub, pillow and the `nvidia-*`/`cuda-*` families are filtered out so a custom
 node can never replace the image's GPU runtime. (This idea is taken from the creator's
 installer, which handles it correctly; the implementation is rewritten.)
 
-**Phase 3 — models.** Download all 10 files from the private HF mirror using the read-only
-token, in parallel, largest files first. Prefer the `hf` CLI with Xet; fall back to
-`aria2c`, then `curl`, then `wget`. Each file lands in a staging path, is validated by
-parsing its safetensors header against the file size, and only then is atomically moved
-into place. Delete HF download caches afterward so the 77 GB is never stored twice.
+**Phase 3 — models.** Download the active files (10, or 14 with ControlNet) from the private
+HF mirror using the read-only token, in parallel, largest files first, each to its own
+destination under the ComfyUI root. Prefer the `hf` CLI with Xet; fall back to `aria2c`,
+then `curl`, then `wget`. Each file lands in a staging path, is validated, and only then is
+atomically moved into place: exact byte size for every file, plus a safetensors header
+parse for `.safetensors` files. Delete HF download caches afterward so nothing is stored
+twice. Phase 3 runs after phase 2 on purpose — the preprocessor files go inside the
+`comfyui_controlnet_aux` directory that phase 2 creates.
 
-**Phase 4 — workflows.** Fetch both JSONs from the mirror into
-`ComfyUI/user/default/workflows/`.
+**Phase 4 — workflows.** Fetch the active workflow JSONs (1, or 2 with ControlNet) from the
+mirror into `ComfyUI/user/default/workflows/`.
 
 **Phase 5 — restart and verify.** Restart ComfyUI only if phase 2 changed anything. Then
-confirm in the fresh startup log that all 13 packs actually loaded, and report any that
-did not.
+confirm in the fresh startup log that every active pack actually loaded, and report any
+that did not.
 
 Log to `/workspace/provision_minimax.log`, with the same summary style as the existing
 scripts.
@@ -219,15 +283,19 @@ scripts.
 | Expose TCP Ports | `22` |
 | Env `HF_TOKEN` | fine-grained token, **read-only, scoped to the private mirror repo only** |
 | Env `MINIMAX_HF_REPO` | `adri738/minimax-h3-ultra-v3` (default name; any private repo id works) |
+| Env `MINIMAX_CONTROLNET` | `false` on `minimax-h3`, `true` on `minimax-h3-controlnet` |
 
-Container Start Command (one line):
+The table describes both RunPod templates. They are identical in every row except the
+template name and `MINIMAX_CONTROLNET`.
+
+Container Start Command (one line, identical on both templates):
 
 ```
 {"entrypoint": ["bash", "-c", "nohup bash -c 'i=0; while [ ! -d /workspace/runpod-slim/ComfyUI/custom_nodes ] && [ $i -lt 180 ]; do sleep 5; i=$((i+1)); done; curl -fsSL https://raw.githubusercontent.com/adri738/vace-runpod/main/provision_minimax.sh -o /workspace/provision_minimax.sh; bash /workspace/provision_minimax.sh --boot' > /workspace/provision-boot.log 2>&1 & exec /start.sh"]}
 ```
 
-Volume sizing: 77.46 GB of models plus roughly 15 GB of ComfyUI, its virtualenv and the 13
-node packs leaves ~55 GB for generated video. Since pods are always terminated, this disk
+Volume sizing: 77.46 GB of models (82.97 GB with ControlNet) plus roughly 15 GB of ComfyUI,
+its virtualenv and the node packs leaves ~50-55 GB for generated video on either template. Since pods are always terminated, this disk
 is only billed while a pod runs — about $0.02/hour against ~$0.74/hour for the GPU — so the
 extra headroom over a tighter 120 GB costs nothing meaningful and avoids running out of
 space mid-session.
@@ -263,8 +331,9 @@ first thing to check. Verify the actual allocation at deploy time.
 ## Error handling
 
 - No `set -e`. Failures accumulate in `FAILED` and are reported together at the end.
-- Downloads are staged, validated (safetensors header vs file size), then atomically moved.
-  A network drop can never leave a corrupt model that ComfyUI half-loads.
+- Downloads are staged, validated, then atomically moved. Every file must match its exact
+  byte size; `.safetensors` files must additionally have a parseable header. A network
+  drop can never leave a corrupt model that ComfyUI half-loads.
 - Re-running the script retries only what is missing.
 - Node requirements are sanitized so no custom node can replace torch/CUDA/numpy.
 - If ComfyUI must be restarted, wait for the new process to reach "Starting server" and
@@ -275,8 +344,10 @@ first thing to check. Verify the actual allocation at deploy time.
 Against a real pod, in this order:
 
 1. `nvcc --version` — decides whether SageAttention stage 2 is viable. First task, 30 seconds.
-2. Full run on a clean pod: 13 packs load, 10 models validate, both workflows appear in
-   ComfyUI's list.
+2. Full run on a clean pod of `minimax-h3-controlnet` (the superset): 15 packs load, 14
+   models validate, both workflows appear in ComfyUI's list, and the ControlNet workflow
+   opens with no missing nodes. The `minimax-h3` template's narrower selection is proven by
+   unit tests of the group filter rather than by a second paid GPU session.
 3. Idempotence: re-run the script; it should skip everything and finish in under a minute.
 4. Resume: interrupt a download mid-file, re-run, confirm it completes without corruption.
 5. Real generation: load `MINIMAX_H3_ULTRA_WORKFLOW-V3.json` and render a short clip end to
@@ -287,6 +358,9 @@ Against a real pod, in this order:
 
 - Does `runpod/comfyui:1.4.7-cuda13.0` include `nvcc`? Decides SageAttention stage 2.
 - Is the image entrypoint still `/start.sh` at 1.4.7? It was at 1.2.x, per the VACE template.
+- Does `comfyui_controlnet_aux`'s sanitized requirements install a GPU-capable
+  `onnxruntime`? Its DWPose wrapper falls back to CPU and warns when onnxruntime lacks
+  acceleration providers — functional, but slow. Check the startup log for that warning.
 - Which pack provides `SAM3_VideoTrack` / `SAM3_TrackToMask` / `SAM3_TrackPreview`? These are
   not clearly attributable to any of the 13 packs and may now be part of ComfyUI core. If so,
   one pack fewer.
