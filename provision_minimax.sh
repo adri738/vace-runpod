@@ -556,9 +556,11 @@ phase3_models() {
 
     # Largest first across both groups, so the 25 GB text encoder starts at
     # once instead of queueing behind small files.
+    local pids=()
     while IFS='|' read -r name dest_rel bytes; do
         [[ -n "$name" ]] || continue
         download_model "$name" "$dest_rel" "$bytes" "$status" &
+        pids+=($!)
         running=$(( running + 1 ))
         if (( running >= MODEL_PARALLEL )); then
             wait -n 2>/dev/null || true
@@ -566,7 +568,12 @@ phase3_models() {
         fi
     done <<< "$(active_manifest_lines | sort -t'|' -k3,3nr)"
 
-    wait
+    # Wait only for download jobs — bare 'wait' would also block on the
+    # tee process from setup_logging (bash 5 tracks process-substitution
+    # children), causing a deadlock.
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
 
     failures="$(find "$status" -name 'fail.*' | wc -l | tr -d ' ')"
     if [[ "$failures" != "0" ]]; then
