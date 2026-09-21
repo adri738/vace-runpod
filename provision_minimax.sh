@@ -583,7 +583,7 @@ phase3_models() {
 }
 
 phase4_workflows() {
-    local name dest_dir out
+    local name dest_dir out stage
 
     log ""
     log "──── phase 4: workflows ────"
@@ -594,16 +594,20 @@ phase4_workflows() {
     while IFS= read -r name; do
         [[ -n "$name" ]] || continue
         out="$dest_dir/$name"
+        stage="$STAGING/${name}.part"
 
         if [[ -s "$out" ]]; then
             log " [SKIP] $name already present"
             continue
         fi
 
-        if fetch_mirror_file "$name" "$out" && [[ -s "$out" ]]; then
+        rm -f "$stage"
+
+        if fetch_mirror_file "$name" "$stage" && [[ -s "$stage" ]]; then
+            mv -f "$stage" "$out"
             log " ✓ $name"
         else
-            rm -f "$out"
+            rm -f "$stage"
             log " ❌ $name"
             FAILED+=("workflow: $name")
         fi
