@@ -444,8 +444,300 @@ phase2_node_packs() {
         || FAILED+=("pip: imageio-ffmpeg")
 }
 
+# fetch_mirror_file <path in the mirror repo> <local output path>
+#
+# Tries the fastest transport first and degrades gracefully. Every
+# transport carries the read-only token, because the mirror is private.
+fetch_mirror_file() {
+    local repo_path="$1" out="$2"
+    local url="https://huggingface.co/${MIRROR_REPO}/resolve/main/${repo_path}"
+    local hf_dir="$STAGING/hf/$(basename "$repo_path")"
+
+    mkdir -p "$(dirname "$out")"
+
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+        log "   ✗ HF_TOKEN is not set — the mirror is private and cannot be read"
+        return 1
+    fi
+
+    if command -v hf >/dev/null 2>&1; then
+        rm -rf "$hf_dir"
+        if HF_TOKEN="$HF_TOKEN" hf download "$MIRROR_REPO" "$repo_path" \
+            --local-dir "$hf_dir" >/dev/null 2>&1 \
+            && mv -f "$hf_dir/$repo_path" "$out" 2>/dev/null; then
+            rm -rf "$hf_dir"
+            return 0
+        fi
+        rm -rf "$hf_dir"
+    fi
+
+    if command -v aria2c >/dev/null 2>&1; then
+        if aria2c --continue=true --max-connection-per-server=16 --split=16 \
+                  --min-split-size=8M --file-allocation=none \
+                  --auto-file-renaming=false --allow-overwrite=true \
+                  --max-tries=5 --retry-wait=3 --console-log-level=warn \
+                  --header="Authorization: Bearer ${HF_TOKEN}" \
+                  --dir="$(dirname "$out")" --out="$(basename "$out")" \
+                  "$url"; then
+            return 0
+        fi
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        if curl -L --fail --retry 5 --retry-delay 3 --retry-all-errors \
+                --connect-timeout 30 -C - \
+                -H "Authorization: Bearer ${HF_TOKEN}" \
+                -o "$out" "$url"; then
+            return 0
+        fi
+    fi
+
+    command -v wget >/dev/null 2>&1 && \
+        wget --continue --tries=5 --timeout=120 \
+             --header="Authorization: Bearer ${HF_TOKEN}" \
+             -O "$out" "$url"
+}
+
+# download_model <filename> <dest dir relative to COMFY_ROOT> <bytes> <status dir>
+#
+# The destination is a full relative directory, not a models/ subfolder,
+# because the ControlNet preprocessors live under custom_nodes/. Validation
+# goes through model_ok, which handles the .pth/.onnx/.pt files that have no
+# safetensors header.
+download_model() {
+    local name="$1" dest_rel="$2" bytes="$3" status="$4"
+    local dest="$COMFY_ROOT/$dest_rel/$name"
+    local stage="$STAGING/${name}.part"
+
+    mkdir -p "$(dirname "$dest")"
+
+    if model_ok "$dest" "$bytes"; then
+        log " [SKIP] $name (already valid)"
+        : > "$status/ok.$name"
+        return 0
+    fi
+
+    if [[ -e "$dest" ]]; then
+        log " [WARN] discarding incomplete $name"
+        rm -f "$dest"
+    fi
+
+    log " • downloading $name"
+    rm -f "$stage"
+
+    if fetch_mirror_file "$name" "$stage" && model_ok "$stage" "$bytes"; then
+        mv -f "$stage" "$dest"
+        log "   ✓ $name"
+        : > "$status/ok.$name"
+        return 0
+    fi
+
+    rm -f "$stage"
+    log "   ✗ FAILED $name"
+    : > "$status/fail.$name"
+    return 1
+}
+
+phase3_models() {
+    local status name dest_rel bytes running=0 failures count total
+
+    log ""
+    log "──── phase 3: models ────"
+
+    # Counted from the manifest rather than hardcoded: 10 files on the base
+    # template, 14 with ControlNet.
+    count="$(active_manifest_lines | grep -c .)"
+    total="$(active_manifest_lines | awk -F'|' '{s += $3} END {printf "%d", s}')"
+    log "$count files, $total bytes, ${MODEL_PARALLEL} at a time"
+
+    status="$STAGING/status"
+    rm -rf "$status"
+    mkdir -p "$status"
+
+    # Largest first across both groups, so the 25 GB text encoder starts at
+    # once instead of queueing behind small files.
+    while IFS='|' read -r name dest_rel bytes; do
+        [[ -n "$name" ]] || continue
+        download_model "$name" "$dest_rel" "$bytes" "$status" &
+        running=$(( running + 1 ))
+        if (( running >= MODEL_PARALLEL )); then
+            wait -n 2>/dev/null || true
+            running=$(( running - 1 ))
+        fi
+    done <<< "$(active_manifest_lines | sort -t'|' -k3,3nr)"
+
+    wait
+
+    failures="$(find "$status" -name 'fail.*' | wc -l | tr -d ' ')"
+    if [[ "$failures" != "0" ]]; then
+        # Process substitution, not a pipe: a piped while-loop runs in a
+        # subshell and its appends to FAILED would be discarded.
+        while IFS= read -r entry; do
+            FAILED+=("model: ${entry#fail.}")
+        done < <(find "$status" -name 'fail.*' -exec basename {} \;)
+    fi
+
+    # The HF CLI keeps its own copy under the staging dir; 77-83 GB is not
+    # something to store twice on a 150 GB volume.
+    rm -rf "$STAGING/hf"
+}
+
+phase4_workflows() {
+    local name dest_dir out
+
+    log ""
+    log "──── phase 4: workflows ────"
+
+    dest_dir="$COMFY_ROOT/user/default/workflows"
+    mkdir -p "$dest_dir"
+
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        out="$dest_dir/$name"
+
+        if [[ -s "$out" ]]; then
+            log " [SKIP] $name already present"
+            continue
+        fi
+
+        if fetch_mirror_file "$name" "$out" && [[ -s "$out" ]]; then
+            log " ✓ $name"
+        else
+            rm -f "$out"
+            log " ❌ $name"
+            FAILED+=("workflow: $name")
+        fi
+    done <<< "$(active_workflow_lines)"
+}
+
+phase5_restart_and_verify() {
+    local pattern='[p]ython.*main\.py.*--port(=|[[:space:]])8188'
+    local args_file="/workspace/runpod-slim/comfyui_args.txt"
+    local log_start=1 new_log new_pid dir url sha missing=0 extra
+    local -a args=(--listen 0.0.0.0 --port 8188 --enable-cors-header)
+
+    log ""
+    log "──── phase 5: restart and verify ────"
+
+    if [[ "${NODES_CHANGED:-0}" != "1" ]] && pgrep -f "$pattern" >/dev/null 2>&1; then
+        log "• no node changes and ComfyUI is running — no restart needed"
+        return 0
+    fi
+
+    if [[ -f "$args_file" ]]; then
+        extra="$(grep -vE '^[[:space:]]*(#|$)' "$args_file" | tr '\n' ' ' || true)"
+        if [[ -n "$extra" ]]; then
+            # Intentional word splitting: these are CLI flags.
+            # shellcheck disable=SC2206
+            local parsed=( $extra )
+            args+=("${parsed[@]}")
+        fi
+    fi
+
+    if pgrep -f "$pattern" >/dev/null 2>&1; then
+        log "• stopping the running ComfyUI"
+        pkill -f "$pattern" 2>/dev/null || true
+        for _ in {1..40}; do
+            pgrep -f "$pattern" >/dev/null 2>&1 || break
+            sleep 0.5
+        done
+        if pgrep -f "$pattern" >/dev/null 2>&1; then
+            log "❌ the old ComfyUI process would not stop; not starting a second one"
+            FAILED+=("phase 5: stale ComfyUI process")
+            return 1
+        fi
+    fi
+
+    log_start=$(( $(wc -l < "$LOG" 2>/dev/null || echo 0) + 1 ))
+
+    cd "$COMFY_ROOT" || return 1
+    nohup "$PYTHON" main.py "${args[@]}" >> "$LOG" 2>&1 </dev/null &
+    new_pid=$!
+    log "• started ComfyUI as PID $new_pid"
+
+    for _ in {1..180}; do
+        if ! kill -0 "$new_pid" 2>/dev/null; then
+            log "❌ ComfyUI exited during startup"
+            FAILED+=("phase 5: ComfyUI exited")
+            return 1
+        fi
+        new_log="$(tail -n +"$log_start" "$LOG" 2>/dev/null || true)"
+        grep -Fq "Starting server" <<< "$new_log" && break
+        sleep 1
+    done
+
+    new_log="$(tail -n +"$log_start" "$LOG" 2>/dev/null || true)"
+    if ! grep -Fq "Starting server" <<< "$new_log"; then
+        log "❌ ComfyUI did not finish starting within 180s"
+        FAILED+=("phase 5: startup timeout")
+        return 1
+    fi
+
+    log "• ComfyUI reached server startup; checking node packs"
+
+    while IFS='|' read -r dir url sha; do
+        [[ -n "$dir" ]] || continue
+        if grep -Fq "/custom_nodes/${dir}" <<< "$new_log"; then
+            log "   ✓ loaded: $dir"
+        else
+            log "   ✗ NOT LOADED: $dir"
+            missing=$(( missing + 1 ))
+        fi
+    done <<< "$(active_node_pack_lines)"
+
+    if (( missing > 0 )); then
+        FAILED+=("phase 5: $missing node pack(s) did not load")
+    fi
+}
+
+summary() {
+    log ""
+    log "──────────────────────────────────"
+    if [[ ${#FAILED[@]} -eq 0 ]]; then
+        log "✅ MiniMax H3 provisioning finished — ComfyUI is ready on port 8188."
+        log "   Both workflows are in ComfyUI's saved-workflow list."
+    else
+        log "⚠️  finished with ${#FAILED[@]} problem(s):"
+        printf '   ❌ %s\n' "${FAILED[@]}"
+        log "Re-run this script; it retries only what is missing:"
+        log "   bash /workspace/provision_minimax.sh"
+    fi
+    log "════ done: $(date) ════"
+}
+
 main() {
-    log "provision_minimax.sh: no phases implemented yet"
+    setup_logging
+
+    # Keep HuggingFace's caches on the 150 GB volume, not the 25 GB container
+    # disk: the Xet backend keeps a chunk cache of up to ~10 GB, and the
+    # largest model is 27 GB. Exported here, inside main, so that sourcing
+    # the script for tests still changes nothing.
+    export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
+    export HF_XET_CACHE="${HF_XET_CACHE:-$HF_HOME/xet}"
+
+    log ""
+    log "════ MiniMax H3 provisioning started (${1:-manual}): $(date) ════"
+
+    # Say which template this pod is before doing anything, so a log read
+    # after the fact shows at a glance whether ControlNet was meant to be here.
+    if controlnet_enabled; then
+        log "template: minimax-h3-controlnet (MINIMAX_CONTROLNET=${MINIMAX_CONTROLNET})"
+    else
+        log "template: minimax-h3 (MINIMAX_CONTROLNET=${MINIMAX_CONTROLNET:-unset}, base only)"
+    fi
+
+    if [[ "${1:-}" == "--build-sage" ]]; then
+        build_sage_wheel
+        exit 0
+    fi
+
+    phase0_wait_for_comfyui || { summary; exit 1; }
+    phase1_sageattention
+    phase2_node_packs
+    phase3_models
+    phase4_workflows
+    phase5_restart_and_verify
+    summary
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

@@ -183,6 +183,11 @@ main() {
         exit 1
     fi
 
+    # Keep HuggingFace's caches on the /workspace volume, not the 25 GB
+    # container disk: the Xet backend keeps a chunk cache of up to ~10 GB.
+    export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
+    export HF_XET_CACHE="${HF_XET_CACHE:-$HF_HOME/xet}"
+
     require_tools || exit 1
 
     log "════ mirroring $(mirror_manifest_lines | grep -c .) files -> $MIRROR_REPO ════"
