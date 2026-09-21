@@ -1950,6 +1950,22 @@ assert_eq "active pack lines are dir|url|sha" "0" \
 assert_eq "base template never clones a ControlNet pack" "0" \
     "$( (export MINIMAX_CONTROLNET=false; active_node_pack_lines) \
         | grep -cE '^(ComfyUI-H3-FunControl|comfyui_controlnet_aux)\|')"
+
+echo "-- find_comfy_python --"
+
+# On the real image the only venv is .venv-cu128. An earlier draft searched
+# venv/ and .venv/ and then fell back to the system python3, which would
+# have installed every requirement into the wrong interpreter, silently.
+find_in() { COMFY_ROOT="$1" COMFY_PYTHON="" find_comfy_python; }
+
+fake="$TMP/fakecomfy"
+mkdir -p "$fake/.venv-cu128/bin"
+printf '#!/bin/sh\n' > "$fake/.venv-cu128/bin/python"
+chmod +x "$fake/.venv-cu128/bin/python"
+assert_eq "finds the image's .venv-cu128" "$fake/.venv-cu128/bin/python" "$(find_in "$fake")"
+
+mkdir -p "$TMP/novenv"
+assert_fail "no venv: fails rather than falling back to system python" find_in "$TMP/novenv"
 ```
 
 - [ ] **Step 2: Run it to make sure it fails**
@@ -1993,19 +2009,29 @@ setup_logging() {
     exec > >(tee -a "$LOG") 2>&1
 }
 
+# find_comfy_python — prints ComfyUI's own interpreter, or fails.
+#
+# On runpod/comfyui:1.4.7-cuda13.0 the only venv is .venv-cu128 — a legacy
+# name over a CUDA 13 torch (reconnaissance, 2026-09-21). There is no venv/
+# or .venv/, so those alone would miss it. And there is deliberately no
+# fallback to the system python3: pip-installing node requirements and
+# SageAttention into the wrong interpreter would "succeed" silently and
+# leave ComfyUI without them. Failing loudly is the safer outcome.
 find_comfy_python() {
     local candidate
     for candidate in \
         "${COMFY_PYTHON:-}" \
+        "$COMFY_ROOT/.venv-cu130/bin/python" \
+        "$COMFY_ROOT/.venv-cu128/bin/python" \
+        "$COMFY_ROOT"/.venv*/bin/python \
         "$COMFY_ROOT/venv/bin/python" \
-        "$COMFY_ROOT/.venv/bin/python" \
-        "/workspace/runpod-slim/venv/bin/python"; do
+        "$COMFY_ROOT/.venv/bin/python"; do
         if [[ -n "$candidate" && -x "$candidate" ]]; then
             printf '%s\n' "$candidate"
             return 0
         fi
     done
-    command -v python3
+    return 1
 }
 
 phase0_wait_for_comfyui() {
@@ -2025,9 +2051,25 @@ phase0_wait_for_comfyui() {
         waited=$(( waited + 10 ))
     done
 
-    PYTHON="$(find_comfy_python)"
+    if ! PYTHON="$(find_comfy_python)"; then
+        log "❌ no ComfyUI virtualenv under $COMFY_ROOT — refusing to fall back to the system python"
+        FAILED+=("phase 0: ComfyUI python not found")
+        return 1
+    fi
     log "ComfyUI root : $COMFY_ROOT (ready after ${waited}s)"
     log "ComfyUI python: $PYTHON"
+}
+
+# cuda_majors_match — true when nvcc and ComfyUI's torch target the same
+# CUDA major version. torch's extension builder refuses a major mismatch, so
+# without this check a future image bump could burn 15-30 min of pod time on
+# every boot building a wheel that can never be produced. (On 1.4.7 both are
+# 13 — see the spec's reconnaissance results.)
+cuda_majors_match() {
+    local nv tv
+    nv="$(nvcc --version 2>/dev/null | sed -n 's/.*release \([0-9]*\)\..*/\1/p')"
+    tv="$("$PYTHON" -c 'import torch; print((torch.version.cuda or "").split(".")[0])' 2>/dev/null)"
+    [[ -n "$nv" && "$nv" == "$tv" ]]
 }
 
 # Name of the prebuilt SageAttention wheel in the mirror. It encodes the
@@ -2074,12 +2116,12 @@ phase1_sageattention() {
         FAILED+=("phase 1: no SageAttention")
     fi
 
-    if command -v nvcc >/dev/null 2>&1; then
-        log "• nvcc present — building SageAttention 2++ in the background"
+    if command -v nvcc >/dev/null 2>&1 && cuda_majors_match; then
+        log "• nvcc matches torch's CUDA — building SageAttention 2++ in the background"
         log "  (ComfyUI stays usable on v1 while this runs)"
         nohup bash "$SCRIPT_PATH" --build-sage >> "$LOG" 2>&1 </dev/null &
     else
-        log "• no nvcc in this image — staying on SageAttention v1"
+        log "• no nvcc, or its CUDA major differs from torch's — staying on SageAttention v1"
     fi
 }
 
@@ -2210,7 +2252,7 @@ Also add `SCRIPT_PATH` next to the other constants at the top of the file, so th
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 ```
 
-If Task 6 reported `NO NVCC`, delete the `if command -v nvcc` branch of `phase1_sageattention` and the whole `build_sage_wheel` function rather than shipping code that can never run.
+Task 6 found `nvcc` 13.0 and torch 2.10+cu130 on the image, so the background-build branch and `build_sage_wheel` both ship. `cuda_majors_match` keeps a future image bump from wasting pod time on a build that cannot succeed.
 
 - [ ] **Step 4: Run the tests and make sure they pass**
 
