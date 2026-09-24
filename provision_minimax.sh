@@ -293,7 +293,9 @@ phase1_sageattention() {
     wheel_path="$(sage_wheel_path)" || wheel_path=""
 
     if [[ -n "$wheel_path" ]]; then
-        wheel_local="$STAGING/$(basename "$wheel_path")"
+        local py_tag
+        py_tag="$("$PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')" || py_tag="cp312"
+        wheel_local="$STAGING/sageattention-0.0.0-${py_tag}-${py_tag}-linux_x86_64.whl"
         log "• looking for a prebuilt wheel: $wheel_path"
         if fetch_mirror_file "$wheel_path" "$wheel_local" \
             && "$PYTHON" -m pip install --no-input "$wheel_local"; then
@@ -305,12 +307,20 @@ phase1_sageattention() {
         log "• no usable prebuilt wheel for this image"
     fi
 
-    if "$PYTHON" -m pip install --no-input sageattention; then
-        log "• installed SageAttention v1 from PyPI ✔"
-    else
-        log "• could not install SageAttention at all"
-        FAILED+=("phase 1: no SageAttention")
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+        if "$PYTHON" -m pip install --no-input sageattention; then
+            log "• installed SageAttention v1 from PyPI ✔"
+            break
+        fi
+        if (( attempt < 3 )); then
+            log "• pip install failed (attempt $attempt/3) — retrying in 5s"
+            sleep 5
+        else
+            log "• could not install SageAttention after 3 attempts"
+            FAILED+=("phase 1: no SageAttention")
+        fi
+    done
 
     if command -v nvcc >/dev/null 2>&1 && cuda_majors_match; then
         log "• nvcc matches torch's CUDA — building SageAttention 2++ in the background"
@@ -405,6 +415,29 @@ phase2_node_packs() {
             FAILED+=("node checkout: $dir")
         fi
     done <<< "$(active_node_pack_lines)"
+
+    # Patch VHS to preserve workflow/prompt metadata in video output.
+    # PR #653 (open): audio mux drops metadata tags.
+    # PR #672 (merged on main, but our pin predates it): double json.dumps
+    #   on the prompt makes it unreadable by the frontend.
+    local vhs_nodes="$COMFY_ROOT/custom_nodes/ComfyUI-VideoHelperSuite/videohelpersuite/nodes.py"
+    if [[ -f "$vhs_nodes" ]]; then
+        local patched=0
+        if ! grep -q 'map_metadata' "$vhs_nodes"; then
+            sed -i 's/"-c:v", "copy"\]/"-c:v", "copy", "-map_metadata", "0", "-movflags", "use_metadata_tags"]/' \
+                "$vhs_nodes"
+            patched=1
+        fi
+        if grep -q 'video_metadata\["prompt"\] = json\.dumps' "$vhs_nodes"; then
+            sed -i 's/video_metadata\["prompt"\] = json\.dumps(prompt)/video_metadata["prompt"] = prompt/' \
+                "$vhs_nodes"
+            patched=1
+        fi
+        if (( patched )); then
+            log " • patched VHS video metadata (PR #653 + #672)"
+            NODES_CHANGED=1
+        fi
+    fi
 
     log ""
     log "──── phase 2b: safe node requirements ────"

@@ -18,10 +18,11 @@ The creator's own template is still a third option; my existing
 ## Start a pod
 
 1. https://console.runpod.io → **Pods** → **Deploy**
-2. GPU: **RTX 6000 Ada (48 GB)**
-3. Template: **minimax-h3** or **minimax-h3-controlnet** (mine)
-4. Deploy **On-Demand**
-5. First boot: roughly **15–25 minutes**, dominated by the models. Check
+2. Filter: **CUDA 13.0** (the image needs it; an older driver crashes ComfyUI)
+3. GPU: **RTX 6000 Ada (48 GB)**
+4. Template: **minimax-h3** or **minimax-h3-controlnet** (mine)
+5. Deploy **On-Demand**
+6. First boot: roughly **15–25 minutes**, dominated by the models. Check
    progress: Connect → **JupyterLab (8888)** → Terminal:
 
    ```
@@ -31,7 +32,7 @@ The creator's own template is still a third option; my existing
    The log's second line names the template (`template: minimax-h3` or
    `template: minimax-h3-controlnet`) — if it names the wrong one, the
    `MINIMAX_CONTROLNET` variable on the template is wrong.
-6. Wait for `✅ MiniMax H3 provisioning finished`.
+7. Wait for `✅ MiniMax H3 provisioning finished`.
 
 ## If the log file never appears (~5 min)
 
