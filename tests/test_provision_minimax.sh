@@ -311,4 +311,22 @@ assert_eq "finds the image's .venv-cu128" "$fake/.venv-cu128/bin/python" "$(find
 mkdir -p "$TMP/novenv"
 assert_fail "no venv: fails rather than falling back to system python" find_in "$TMP/novenv"
 
+echo "-- driver CUDA check --"
+
+assert_ok "CUDA 13.0 is supported" cuda_version_supported "13.0"
+assert_ok "CUDA 13.2 is supported" cuda_version_supported "13.2"
+assert_fail "CUDA 12.8 is rejected (the pod that failed on 2026-09-25)" cuda_version_supported "12.8"
+assert_fail "CUDA 12.9 is rejected" cuda_version_supported "12.9"
+assert_fail "empty version is rejected" cuda_version_supported ""
+assert_fail "garbage version is rejected" cuda_version_supported "abc"
+
+smi_dir="$TMP/fakesmi"
+mkdir -p "$smi_dir"
+printf '#!/bin/sh\necho "| NVIDIA-SMI 570.1   Driver Version: 570.1   CUDA Version: 12.8 |"\n' > "$smi_dir/nvidia-smi"
+chmod +x "$smi_dir/nvidia-smi"
+assert_eq "reads the version from nvidia-smi's header" "12.8" \
+    "$(PATH="$smi_dir:$PATH" driver_cuda_version)"
+assert_fail "check_driver stops on an old driver" \
+    env PATH="$smi_dir:$PATH" bash -c "source provision_minimax.sh; check_driver"
+
 finish

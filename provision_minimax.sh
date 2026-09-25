@@ -230,6 +230,45 @@ find_comfy_python() {
     return 1
 }
 
+# driver_cuda_version — the highest CUDA version the host driver supports
+# (e.g. "12.8"), read from nvidia-smi's header. Prints nothing if unknown.
+driver_cuda_version() {
+    nvidia-smi 2>/dev/null \
+        | sed -n 's/.*CUDA Version: *\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' \
+        | head -1
+}
+
+# cuda_version_supported VERSION — true when the driver reaches CUDA 13, which
+# the image's torch requires. A pod placed on an older host installs
+# everything and then ComfyUI dies at startup ("driver too old", 2026-09-25).
+cuda_version_supported() {
+    local major="${1%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 13 ))
+}
+
+# Fails fast, before ~89 GB of downloads, when the host driver is too old.
+# An unreadable version is not treated as a failure: nvidia-smi may simply
+# be absent, and ComfyUI's own startup check still catches a real mismatch.
+check_driver() {
+    local version
+    version="$(driver_cuda_version)"
+
+    if [[ -z "$version" ]]; then
+        log "• could not read the driver's CUDA version — continuing"
+        return 0
+    fi
+    if cuda_version_supported "$version"; then
+        log "• driver supports CUDA $version ✔"
+        return 0
+    fi
+
+    log "❌ this machine's driver supports only CUDA $version; the image needs 13.0 or newer"
+    log "   Re-running this script will NOT fix it. Terminate the pod and deploy again"
+    log "   with the CUDA 13.0 filter applied before choosing the GPU."
+    log "════ stopped: $(date) ════"
+    return 1
+}
+
 phase0_wait_for_comfyui() {
     local waited=0
     local limit="${COMFY_WAIT_SECONDS:-1800}"
@@ -237,11 +276,16 @@ phase0_wait_for_comfyui() {
     log ""
     log "──── phase 0: waiting for ComfyUI ────"
 
-    while [[ ! -d "$COMFY_ROOT/custom_nodes" ]]; do
+    # The image creates custom_nodes before its virtualenv, so wait for both;
+    # checking only the directory raced the venv on a fresh boot (2026-09-25).
+    while [[ ! -d "$COMFY_ROOT/custom_nodes" ]] || ! find_comfy_python >/dev/null; do
         if (( waited >= limit )); then
-            log "❌ ComfyUI never appeared at $COMFY_ROOT after ${limit}s"
-            FAILED+=("phase 0: ComfyUI not found at $COMFY_ROOT")
-            return 1
+            if [[ ! -d "$COMFY_ROOT/custom_nodes" ]]; then
+                log "❌ ComfyUI never appeared at $COMFY_ROOT after ${limit}s"
+                FAILED+=("phase 0: ComfyUI not found at $COMFY_ROOT")
+                return 1
+            fi
+            break
         fi
         sleep 10
         waited=$(( waited + 10 ))
@@ -790,6 +834,7 @@ main() {
         exit 0
     fi
 
+    check_driver || exit 1
     phase0_wait_for_comfyui || { summary; exit 1; }
     phase1_sageattention
     phase2_node_packs
