@@ -120,20 +120,15 @@ Container Start Command (one line, exactly):
 It fetches from `main`, so the branch must be merged before a pod can use
 it.
 
-## The one-time SageAttention wheel upload
+## SageAttention wheel
 
-First boot builds SageAttention v2++ in the background (~15–30 minutes)
-while ComfyUI keeps running on v1. When the build finishes, the log prints
-the exact command to upload the wheel to the mirror:
-
-```
-export HF_WRITE_TOKEN=hf_xxx
-HF_TOKEN=$HF_WRITE_TOKEN hf upload adri73782/minimax-h3-ultra-v3 <wheel path> <mirror path>
-```
-
-Do this once, before terminating that pod — the wheel dies with the
-volume otherwise. After it's uploaded, every future pod finds it on the
-mirror and skips the 15–30 minute build entirely.
+Already uploaded to the mirror (confirmed in the log of 2026-09-25:
+`installed SageAttention 2++ from the mirror`). New pods download it and
+skip the 15–30 minute build. You only need to upload a new wheel if the
+image's Python, CUDA or torch version changes: the log will then say
+`no usable prebuilt wheel for this image` and, once the background build
+finishes, print the exact `hf upload` command. Run it before terminating
+that pod — the wheel dies with the volume otherwise.
 
 ## If ComfyUI doesn't respond, or the log ends with "ComfyUI python not found"
 
