@@ -329,4 +329,17 @@ assert_eq "reads the version from nvidia-smi's header" "12.8" \
 assert_fail "check_driver stops on an old driver" \
     env PATH="$smi_dir:$PATH" bash -c "source provision_minimax.sh; check_driver"
 
+echo "-- download speed monitor --"
+
+# 150 MB/s: a healthy pod. 2 MB/s: the pod that would have taken hours.
+fast="$(download_rate_message 150000000 89084560623)"
+slow="$(download_rate_message 2300000 89084560623)"
+stalled="$(download_rate_message 0 89084560623)"
+assert_eq "a fast link gets no warning" "0" "$(printf '%s' "$fast" | grep -c 'SLOW')"
+assert_eq "a fast link reports its speed" "1" "$(printf '%s' "$fast" | grep -c '150 MB/s')"
+assert_eq "a slow link is flagged" "1" "$(printf '%s' "$slow" | grep -c 'SLOW downloads: ~2 MB/s')"
+assert_eq "a slow link says to terminate and redeploy" "1" "$(printf '%s' "$slow" | grep -c 'terminating the pod')"
+assert_eq "a slow link estimates the hours" "1" "$(printf '%s' "$slow" | grep -c 'about 10 h')"
+assert_eq "a stalled link is flagged, without dividing by zero" "1" "$(printf '%s' "$stalled" | grep -c 'no progress')"
+
 finish

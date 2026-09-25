@@ -47,7 +47,12 @@ The creator's own template is still a third option; my existing
    The log's second line names the template (`template: minimax-h3` or
    `template: minimax-h3-controlnet`) — if it names the wrong one, the
    `MINIMAX_CONTROLNET` variable on the template is wrong.
-7. Wait for `✅ MiniMax H3 provisioning finished`.
+7. During the model downloads (phase 3) the log prints the speed every
+   minute (` • downloading at ~150 MB/s`). If it prints
+   `⚠️  SLOW downloads: ~2 MB/s, about 10 h ...`, this machine has a poor
+   connection: terminate the pod and deploy again instead of paying to wait.
+   (Threshold: under 20 MB/s; override with `MINIMAX_MIN_BPS`.)
+8. Wait for `✅ MiniMax H3 provisioning finished`.
 
 ## GPU comparison
 

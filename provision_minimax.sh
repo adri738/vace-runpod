@@ -615,6 +615,45 @@ download_model() {
     return 1
 }
 
+# download_rate_message BYTES_PER_SECOND TOTAL_BYTES — one log line for the
+# speed monitor; a slow rate gets a warning that says what to do about it.
+# A machine on a ~2 MB/s link (2026-09-25) would have billed hours of GPU
+# time for an install that can never finish in a useful time.
+download_rate_message() {
+    local bps="$1" total="$2" hours
+    local min_bps="${MINIMAX_MIN_BPS:-20000000}"
+
+    if (( bps >= min_bps )); then
+        printf ' • downloading at ~%d MB/s\n' $(( bps / 1000000 ))
+        return 0
+    fi
+    if (( bps > 0 )); then
+        hours=$(( total / bps / 3600 ))
+        printf ' ⚠️  SLOW downloads: ~%d MB/s, about %d h for all the models.\n' \
+            $(( bps / 1000000 )) "$hours"
+    else
+        printf ' ⚠️  SLOW downloads: no progress in the last interval.\n'
+    fi
+    printf '    This machine has a poor connection. Consider terminating the pod\n'
+    printf '    and deploying again (another region or machine) instead of paying to wait.\n'
+}
+
+# download_monitor TOTAL_BYTES — runs in the background during phase 3 and
+# logs the download speed once per interval. It measures growth of the
+# staging dir; a finished file moves out of it, so a shrinking sample is
+# skipped (that means a file just completed, not a slow link).
+download_monitor() {
+    local total="$1" interval="${MINIMAX_MONITOR_INTERVAL:-60}" prev now
+    prev="$(du -sb "$STAGING" 2>/dev/null | cut -f1)"
+    while sleep "$interval"; do
+        now="$(du -sb "$STAGING" 2>/dev/null | cut -f1)"
+        if [[ -n "$now" && -n "$prev" ]] && (( now >= prev )); then
+            download_rate_message $(( (now - prev) / interval )) "$total"
+        fi
+        prev="$now"
+    done
+}
+
 phase3_models() {
     local status name dest_rel bytes running=0 failures count total
 
@@ -633,6 +672,11 @@ phase3_models() {
 
     # Largest first across both groups, so the 25 GB text encoder starts at
     # once instead of queueing behind small files.
+    # Started before the loop: 'wait -n' below only returns for jobs that
+    # exit, and the monitor runs until it is killed after the downloads.
+    download_monitor "$total" &
+    local monitor_pid=$!
+
     local pids=()
     while IFS='|' read -r name dest_rel bytes; do
         [[ -n "$name" ]] || continue
@@ -651,6 +695,8 @@ phase3_models() {
     for pid in "${pids[@]}"; do
         wait "$pid" 2>/dev/null || true
     done
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
 
     failures="$(find "$status" -name 'fail.*' | wc -l | tr -d ' ')"
     if [[ "$failures" != "0" ]]; then
