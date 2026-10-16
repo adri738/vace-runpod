@@ -311,6 +311,25 @@ assert_eq "finds the image's .venv-cu128" "$fake/.venv-cu128/bin/python" "$(find
 mkdir -p "$TMP/novenv"
 assert_fail "no venv: fails rather than falling back to system python" find_in "$TMP/novenv"
 
+echo "-- sage_wheel_path --"
+
+# A stub interpreter that answers the three one-liners sage_wheel_path asks.
+stub="$TMP/stubpy"
+cat > "$stub" <<'STUB'
+#!/bin/sh
+case "$2" in
+    *sys.version_info*) echo cp312 ;;
+    *torch.__version__*) echo 2.10.0 ;;
+    *torch.version.cuda*) echo cu130 ;;
+esac
+STUB
+chmod +x "$stub"
+assert_eq "wheel name encodes python, CUDA and torch" \
+    "wheels/sageattention-cp312-cu130-torch2.10.0.whl" \
+    "$(PYTHON="$stub" sage_wheel_path)"
+assert_fail "no usable interpreter: sage_wheel_path fails" \
+    env PYTHON=/nonexistent bash -c 'source provision_minimax.sh; sage_wheel_path'
+
 echo "-- driver CUDA check --"
 
 assert_ok "CUDA 13.0 is supported" cuda_version_supported "13.0"

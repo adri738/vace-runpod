@@ -334,7 +334,20 @@ phase1_sageattention() {
         return 0
     fi
 
-    wheel_path="$(sage_wheel_path)" || wheel_path=""
+    # Worked out by asking torch, which can fail for a few seconds on a fresh
+    # boot. It used to be skipped silently, so a pod went on to build the wheel
+    # instead of downloading it (2026-10-16): retry, and say so when giving up.
+    local try
+    wheel_path=""
+    for try in 1 2 3; do
+        wheel_path="$(sage_wheel_path)" && break
+        wheel_path=""
+        if (( try < 3 )); then
+            log "• could not work out the prebuilt wheel's name (attempt $try/3) — retrying in 5s"
+            sleep 5
+        fi
+    done
+    [[ -n "$wheel_path" ]] || log "• could not work out the prebuilt wheel's name — skipping the mirror lookup"
 
     if [[ -n "$wheel_path" ]]; then
         local py_tag
