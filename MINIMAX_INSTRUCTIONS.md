@@ -52,7 +52,11 @@ The creator's own template is still a third option; my existing
    `⚠️  SLOW downloads: ~2 MB/s, about 10 h ...`, this machine has a poor
    connection: terminate the pod and deploy again instead of paying to wait.
    (Threshold: under 20 MB/s; override with `MINIMAX_MIN_BPS`.)
-8. Wait for `✅ MiniMax H3 provisioning finished`.
+8. Wait for `✅ MiniMax H3 provisioning finished`, and check the line just
+   above it: `• SageAttention 2.2.0 ✔`. If instead the log ends with
+   `⚠️  SageAttention is 1.x, not v2++`, the pod is running the slower v1.
+   Just run `bash /workspace/provision_minimax.sh` again: it fetches v2++
+   from the mirror and restarts ComfyUI by itself (reload the 8188 tab after).
 
 ## GPU comparison
 

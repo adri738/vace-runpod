@@ -323,15 +323,35 @@ sage_wheel_path() {
     printf 'wheels/sageattention-%s-%s-torch%s.whl\n' "$py" "$cu" "$tv"
 }
 
+# sage_version — the installed SageAttention version, or nothing.
+sage_version() {
+    "$PYTHON" -c 'import importlib.metadata as m; print(m.version("sageattention"))' 2>/dev/null
+}
+
+# sage_is_v2 VERSION — true for 2.x and later; v1 is only the slow fallback.
+sage_is_v2() {
+    local major="${1%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 2 ))
+}
+
 phase1_sageattention() {
-    local wheel_path wheel_local
+    local wheel_path wheel_local current v1_present=0
+
+    SAGE_CHANGED=0
 
     log ""
     log "──── phase 1: SageAttention ────"
 
-    if "$PYTHON" -c 'import sageattention' 2>/dev/null; then
-        log "• already importable — skip"
+    # Skipping on "importable" alone left a pod stuck on v1 for good: a re-run
+    # saw v1 and did nothing (2026-10-16). Only v2 or later counts as done.
+    current="$(sage_version)"
+    if sage_is_v2 "$current"; then
+        log "• SageAttention $current already installed — skip"
         return 0
+    fi
+    if [[ -n "$current" ]]; then
+        v1_present=1
+        log "• SageAttention $current (v1) is installed — looking for v2++"
     fi
 
     # Worked out by asking torch, which can fail for a few seconds on a fresh
@@ -358,16 +378,23 @@ phase1_sageattention() {
             && "$PYTHON" -m pip install --no-input "$wheel_local"; then
             log "• installed SageAttention 2++ from the mirror ✔"
             rm -f "$wheel_local"
+            SAGE_CHANGED=1
             return 0
         fi
         rm -f "$wheel_local"
         log "• no usable prebuilt wheel for this image"
     fi
 
+    if (( v1_present )); then
+        log "• no v2++ available — staying on SageAttention $current"
+        return 0
+    fi
+
     local attempt
     for attempt in 1 2 3; do
         if "$PYTHON" -m pip install --no-input sageattention; then
             log "• installed SageAttention v1 from PyPI ✔"
+            SAGE_CHANGED=1
             break
         fi
         if (( attempt < 3 )); then
@@ -771,6 +798,12 @@ phase5_restart_and_verify() {
     # but crashed before the restart).  Check by asking ComfyUI's API for its
     # loaded node types — if a signature pack is missing, force the restart.
     local needs_restart="${NODES_CHANGED:-0}"
+    # A running ComfyUI keeps the SageAttention it imported at startup, so a
+    # swap on disk changes nothing until it restarts (2026-10-16).
+    if [[ "${SAGE_CHANGED:-0}" == "1" ]]; then
+        log "• SageAttention changed — ComfyUI must restart to load it"
+        needs_restart=1
+    fi
     if [[ "$needs_restart" != "1" ]] && pgrep -f "$pattern" >/dev/null 2>&1; then
         local probe_url="http://127.0.0.1:8188/object_info/MiniMaxH3FlowEditVideoNode"
         if ! curl -sf "$probe_url" >/dev/null 2>&1; then
@@ -850,6 +883,21 @@ phase5_restart_and_verify() {
     fi
 }
 
+# verify_sage — the last word on SageAttention, so a pod on v1 can no longer
+# end in a "finished" line that looks identical to a healthy one.
+verify_sage() {
+    local version
+    version="$(sage_version)"
+
+    log ""
+    if sage_is_v2 "$version"; then
+        log "• SageAttention $version ✔"
+    else
+        log "⚠️  SageAttention is ${version:-missing}, not v2++ — the workflow may run slower"
+        FAILED+=("SageAttention ${version:-missing} is not v2++ (re-run this script to fetch it)")
+    fi
+}
+
 summary() {
     log ""
     log "──────────────────────────────────"
@@ -900,6 +948,7 @@ main() {
     phase3_models
     phase4_workflows
     phase5_restart_and_verify
+    verify_sage
     summary
 }
 

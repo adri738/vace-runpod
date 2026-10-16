@@ -330,6 +330,28 @@ assert_eq "wheel name encodes python, CUDA and torch" \
 assert_fail "no usable interpreter: sage_wheel_path fails" \
     env PYTHON=/nonexistent bash -c 'source provision_minimax.sh; sage_wheel_path'
 
+echo "-- SageAttention version --"
+
+assert_ok "2.2.0 counts as v2++" sage_is_v2 "2.2.0"
+assert_ok "2.0.0 counts as v2++" sage_is_v2 "2.0.0"
+assert_fail "1.0.6 is v1, not done" sage_is_v2 "1.0.6"
+assert_fail "empty version is not done" sage_is_v2 ""
+assert_fail "garbage version is not done" sage_is_v2 "abc"
+
+# A stub interpreter that reports a fixed SageAttention version.
+sage_stub() {
+    printf '#!/bin/sh\necho "%s"\n' "$1" > "$TMP/sagepy"
+    chmod +x "$TMP/sagepy"
+}
+failures_after_verify() { FAILED=(); PYTHON="$TMP/sagepy"; verify_sage >/dev/null; echo "${#FAILED[@]}"; }
+
+sage_stub 2.2.0
+assert_eq "verify_sage passes on 2.2.0" "0" "$(failures_after_verify)"
+sage_stub 1.0.6
+assert_eq "verify_sage reports a pod stuck on v1" "1" "$(failures_after_verify)"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/sagepy"
+assert_eq "verify_sage reports SageAttention missing" "1" "$(failures_after_verify)"
+
 echo "-- driver CUDA check --"
 
 assert_ok "CUDA 13.0 is supported" cuda_version_supported "13.0"
