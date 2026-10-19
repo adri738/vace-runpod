@@ -114,8 +114,8 @@ template name and `MINIMAX_CONTROLNET`.
 | Container Disk | 25 GB |
 | Volume Disk | 150 GB |
 | Volume Mount Path | `/workspace` |
-| Expose HTTP Ports | `8188` (ComfyUI), `8888` (JupyterLab) |
-| Expose TCP Ports | `22` |
+| Expose HTTP Ports (port → label) | `8188` → `ComfyUI`, `8888` → `JupyterLab` |
+| Expose TCP Ports (port → label) | `22` → `SSH` |
 | Env `HF_TOKEN` | fine-grained token, read-only, scoped to the private mirror repo only |
 | Env `MINIMAX_HF_REPO` | `adri73782/minimax-h3-ultra-v3` |
 | Env `MINIMAX_CONTROLNET` | `false` on `minimax-h3`, `true` on `minimax-h3-controlnet` |

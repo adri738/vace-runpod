@@ -46,8 +46,8 @@ notebook-based ffxvs template. Forge auto-starts; my models auto-download.
 | Container Disk | 15 GB |
 | Volume Disk | 60 GB |
 | Volume Mount Path | `/workspace` |
-| Expose HTTP Ports | `7860` (Forge), `8888` (JupyterLab) |
-| Expose TCP Ports | `22` |
+| Expose HTTP Ports (port → label) | `7860` → `Forge`, `8888` → `JupyterLab` |
+| Expose TCP Ports (port → label) | `22` → `SSH` |
 | Env `JUPYTER_ENABLE` | `true` (Jupyter is OFF by default in this image) |
 | Env `IDLE_ENABLE` | `false` (image auto-stops idle pods by default — off until I want that) |
 | Env `WEBUI_USERNAME` | (my choice — protects the Forge page itself) |

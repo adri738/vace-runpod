@@ -60,8 +60,8 @@ Same fallback command — it re-downloads only what's missing.
 | Container Disk | 20 GB |
 | Volume Disk | 80 GB |
 | Volume Mount Path | `/workspace` |
-| Expose HTTP Ports | `8188,8888,8080` |
-| Expose TCP Ports | `22` |
+| Expose HTTP Ports (port → label) | `8188` → `ComfyUI`, `8888` → `JupyterLab`, `8080` → `FileBrowser` |
+| Expose TCP Ports (port → label) | `22` → `SSH` |
 
 Container Start Command (one line, exactly):
 
