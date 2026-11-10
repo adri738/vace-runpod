@@ -374,6 +374,9 @@ phase1_sageattention() {
         py_tag="$("$PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')" || py_tag="cp312"
         wheel_local="$STAGING/sageattention-0.0.0-${py_tag}-${py_tag}-linux_x86_64.whl"
         log "• looking for a prebuilt wheel: $wheel_path"
+        # curl resumes into an existing file; a leftover from a killed run
+        # must not be taken for the start of this one.
+        rm -f "$wheel_local"
         if fetch_mirror_file "$wheel_path" "$wheel_local" \
             && "$PYTHON" -m pip install --no-input "$wheel_local"; then
             log "• installed SageAttention 2++ from the mirror ✔"
@@ -563,12 +566,20 @@ phase2_node_packs() {
 
 # fetch_mirror_file <path in the mirror repo> <local output path>
 #
-# Tries the fastest transport first and degrades gracefully. Every
-# transport carries the read-only token, because the mirror is private.
+# Tries the transports that abort a stalled transfer first, and degrades
+# gracefully. Every transport carries the read-only token, because the
+# mirror is private.
+#
+# The hf CLI goes last. On 2026-11-09 it (huggingface_hub 1.29.0) stalled
+# after ~20 GB on five pods in a row and never exited, so no fallback ever
+# ran, while curl on the same pod pulled 215 MB/s from the same URL. curl
+# gives up on a transfer slower than 1 MB/s for a minute and resumes it.
 fetch_mirror_file() {
     local repo_path="$1" out="$2"
     local url="https://huggingface.co/${MIRROR_REPO}/resolve/main/${repo_path}"
     local hf_dir="$STAGING/hf/$(basename "$repo_path")"
+    local name attempt
+    name="$(basename "$repo_path")"
 
     mkdir -p "$(dirname "$out")"
 
@@ -577,7 +588,45 @@ fetch_mirror_file() {
         return 1
     fi
 
+    if command -v curl >/dev/null 2>&1; then
+        for attempt in 1 2 3 4 5; do
+            if curl -L --fail --silent --show-error \
+                    --connect-timeout 30 --speed-limit 1000000 --speed-time 60 \
+                    -C - -H "Authorization: Bearer ${HF_TOKEN}" \
+                    -o "$out" "$url"; then
+                return 0
+            fi
+            log "   … $name: curl attempt $attempt/5 failed"
+            sleep "${MINIMAX_RETRY_WAIT:-3}"
+        done
+    fi
+
+    if command -v aria2c >/dev/null 2>&1; then
+        log "   … $name: trying aria2c"
+        if aria2c --continue=true --max-connection-per-server=16 --split=16 \
+                  --min-split-size=8M --file-allocation=none \
+                  --auto-file-renaming=false --allow-overwrite=true \
+                  --max-tries=5 --retry-wait=3 --lowest-speed-limit=1M \
+                  --console-log-level=warn --summary-interval=0 \
+                  --show-console-readout=false \
+                  --header="Authorization: Bearer ${HF_TOKEN}" \
+                  --dir="$(dirname "$out")" --out="$(basename "$out")" \
+                  "$url"; then
+            return 0
+        fi
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        log "   … $name: trying wget"
+        if wget --quiet --continue --tries=5 --timeout=120 \
+                --header="Authorization: Bearer ${HF_TOKEN}" \
+                -O "$out" "$url"; then
+            return 0
+        fi
+    fi
+
     if command -v hf >/dev/null 2>&1; then
+        log "   … $name: trying the hf CLI"
         rm -rf "$hf_dir"
         if HF_TOKEN="$HF_TOKEN" hf download "$MIRROR_REPO" "$repo_path" \
             --local-dir "$hf_dir" >/dev/null 2>&1 \
@@ -587,32 +636,7 @@ fetch_mirror_file() {
         fi
         rm -rf "$hf_dir"
     fi
-
-    if command -v aria2c >/dev/null 2>&1; then
-        if aria2c --continue=true --max-connection-per-server=16 --split=16 \
-                  --min-split-size=8M --file-allocation=none \
-                  --auto-file-renaming=false --allow-overwrite=true \
-                  --max-tries=5 --retry-wait=3 --console-log-level=warn \
-                  --header="Authorization: Bearer ${HF_TOKEN}" \
-                  --dir="$(dirname "$out")" --out="$(basename "$out")" \
-                  "$url"; then
-            return 0
-        fi
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        if curl -L --fail --retry 5 --retry-delay 3 --retry-all-errors \
-                --connect-timeout 30 -C - \
-                -H "Authorization: Bearer ${HF_TOKEN}" \
-                -o "$out" "$url"; then
-            return 0
-        fi
-    fi
-
-    command -v wget >/dev/null 2>&1 && \
-        wget --continue --tries=5 --timeout=120 \
-             --header="Authorization: Bearer ${HF_TOKEN}" \
-             -O "$out" "$url"
+    return 1
 }
 
 # download_model <filename> <dest dir relative to COMFY_ROOT> <bytes> <status dir>

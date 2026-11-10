@@ -383,4 +383,37 @@ assert_eq "a slow link says to terminate and redeploy" "1" "$(printf '%s' "$slow
 assert_eq "a slow link estimates the hours" "1" "$(printf '%s' "$slow" | grep -c 'about 10 h')"
 assert_eq "a stalled link is flagged, without dividing by zero" "1" "$(printf '%s' "$stalled" | grep -c 'no progress')"
 
+echo "-- fetch_mirror_file --"
+
+# Stub transports: each records its name and succeeds only if listed in
+# $WORKS. Functions shadow the real binaries, and command -v finds them.
+calls="$TMP/calls"
+works() { [[ " $WORKS " == *" $1 "* ]]; }
+curl()   { echo curl   >> "$calls"; works curl   && echo data > "${@: -2:1}"; }
+aria2c() { echo aria2c >> "$calls"; works aria2c; }
+wget()   { echo wget   >> "$calls"; works wget; }
+hf() {
+    echo hf >> "$calls"
+    works hf || return 1
+    mkdir -p "$STAGING/hf/m.bin" && echo data > "$STAGING/hf/m.bin/m.bin"
+}
+fetch_order() {
+    : > "$calls"
+    WORKS="$1" HF_TOKEN=x STAGING="$TMP/stage" MINIMAX_RETRY_WAIT=0 \
+        fetch_mirror_file m.bin "$TMP/out/m.bin" >/dev/null
+    echo "$? $(tr '\n' ' ' < "$calls")"
+}
+
+assert_eq "curl goes first and is enough when it works" "0 curl " "$(fetch_order curl)"
+assert_eq "curl retries five times before giving up" \
+    "0 curl curl curl curl curl aria2c " "$(fetch_order aria2c)"
+# The hang of 2026-11-09: hf never returned, so nothing after it ran.
+assert_eq "hf is the last resort, after every other transport" \
+    "0 curl curl curl curl curl aria2c wget hf " "$(fetch_order hf)"
+assert_eq "fails when every transport fails" \
+    "1 curl curl curl curl curl aria2c wget hf " "$(fetch_order none)"
+assert_eq "no token: fails without trying anything" "1 " \
+    "$(: > "$calls"; HF_TOKEN= fetch_mirror_file m.bin "$TMP/out/m.bin" >/dev/null; echo "$? $(tr '\n' ' ' < "$calls")")"
+unset -f curl aria2c wget hf
+
 finish
