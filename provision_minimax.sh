@@ -564,7 +564,62 @@ phase2_node_packs() {
         || FAILED+=("pip: imageio-ffmpeg")
 }
 
-# fetch_mirror_file <path in the mirror repo> <local output path>
+# fetch_range <url> <piece file> <first byte> <last byte> <total bytes>
+#
+# Appends bytes first..last of <url> to <piece file>, resuming from what the
+# piece already holds. Fails unless the piece ends up exactly that long, which
+# also catches a server that ignores the Range header and sends everything.
+fetch_range() {
+    local url="$1" piece="$2" from="$3" to="$4" total="$5" have try
+    (( to < total )) || to=$(( total - 1 ))
+    : >> "$piece"
+    (( from <= to )) || return 0
+    for try in 1 2 3 4 5 6 7 8; do
+        have="$(stat -c %s "$piece")"
+        (( from + have > to )) && break
+        curl -L --fail --silent --show-error --connect-timeout 30 \
+             --speed-limit 500000 --speed-time 60 \
+             -r "$(( from + have ))-$to" -H "Authorization: Bearer ${HF_TOKEN}" \
+             "$url" >> "$piece"
+    done
+    [[ "$(stat -c %s "$piece")" == "$(( to - from + 1 ))" ]]
+}
+
+# fetch_ranges <url> <output> <total bytes>
+#
+# Downloads the rest of a partial <output> over MINIMAX_RANGE_PARTS parallel
+# connections and appends the parts in order. On 2026-11-14 one 21 GB model
+# crawled at 2–10 MB/s on a single connection while the other 13 had come in
+# fast; 16 ranged connections pulled the rest at 163 MB/s.
+fetch_ranges() {
+    local url="$1" out="$2" total="$3" parts="${MINIMAX_RANGE_PARTS:-16}"
+    local start chunk i ok=1 pids=()
+    : >> "$out"
+    start="$(stat -c %s "$out")"
+    (( start == total )) && return 0
+    (( start < total )) || return 1
+    chunk=$(( (total - start + parts - 1) / parts ))
+
+    for (( i = 0; i < parts; i++ )); do
+        fetch_range "$url" "$out.piece$i" $(( start + i * chunk )) \
+            $(( start + (i + 1) * chunk - 1 )) "$total" &
+        pids+=($!)
+    done
+    for i in "${pids[@]}"; do
+        wait "$i" || ok=0
+    done
+
+    # Appended and deleted one by one, so the volume never holds the
+    # remainder twice.
+    for (( i = 0; ok && i < parts; i++ )); do
+        cat "$out.piece$i" >> "$out" || ok=0
+        rm -f "$out.piece$i"
+    done
+    rm -f "$out".piece*
+    (( ok )) && [[ "$(stat -c %s "$out")" == "$total" ]]
+}
+
+# fetch_mirror_file <path in the mirror repo> <local output path> [bytes]
 #
 # Tries the transports that abort a stalled transfer first, and degrades
 # gracefully. Every transport carries the read-only token, because the
@@ -573,13 +628,16 @@ phase2_node_packs() {
 # The hf CLI goes last. On 2026-11-09 it (huggingface_hub 1.29.0) stalled
 # after ~20 GB on five pods in a row and never exited, so no fallback ever
 # ran, while curl on the same pod pulled 215 MB/s from the same URL. curl
-# gives up on a transfer slower than 1 MB/s for a minute and resumes it.
+# gives up on a transfer slower than MINIMAX_STALL_BPS for a minute and
+# resumes it. When the size is known (the models), a connection that stays
+# slow after two tries hands the rest to fetch_ranges.
 fetch_mirror_file() {
-    local repo_path="$1" out="$2"
+    local repo_path="$1" out="$2" bytes="${3:-}"
     local url="https://huggingface.co/${MIRROR_REPO}/resolve/main/${repo_path}"
     local hf_dir="$STAGING/hf/$(basename "$repo_path")"
-    local name attempt
+    local name attempt tries=5
     name="$(basename "$repo_path")"
+    [[ -n "$bytes" ]] && tries=2
 
     mkdir -p "$(dirname "$out")"
 
@@ -589,16 +647,21 @@ fetch_mirror_file() {
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        for attempt in 1 2 3 4 5; do
-            if curl -L --fail --silent --show-error \
-                    --connect-timeout 30 --speed-limit 1000000 --speed-time 60 \
+        for (( attempt = 1; attempt <= tries; attempt++ )); do
+            if curl -L --fail --silent --show-error --connect-timeout 30 \
+                    --speed-limit "${MINIMAX_STALL_BPS:-20000000}" --speed-time 60 \
                     -C - -H "Authorization: Bearer ${HF_TOKEN}" \
                     -o "$out" "$url"; then
                 return 0
             fi
-            log "   … $name: curl attempt $attempt/5 failed"
+            log "   … $name: curl attempt $attempt/$tries failed"
             sleep "${MINIMAX_RETRY_WAIT:-3}"
         done
+        if [[ -n "$bytes" ]]; then
+            log "   … $name: downloading the rest over ${MINIMAX_RANGE_PARTS:-16} connections"
+            fetch_ranges "$url" "$out" "$bytes" && return 0
+            log "   … $name: parallel download failed"
+        fi
     fi
 
     if command -v aria2c >/dev/null 2>&1; then
@@ -666,7 +729,7 @@ download_model() {
     log " • downloading $name"
     rm -f "$stage"
 
-    if fetch_mirror_file "$name" "$stage" && model_ok "$stage" "$bytes"; then
+    if fetch_mirror_file "$name" "$stage" "$bytes" && model_ok "$stage" "$bytes"; then
         mv -f "$stage" "$dest"
         log "   ✓ $name"
         : > "$status/ok.$name"
@@ -679,12 +742,14 @@ download_model() {
     return 1
 }
 
-# download_rate_message BYTES_PER_SECOND TOTAL_BYTES — one log line for the
+# download_rate_message BYTES_PER_SECOND BYTES_LEFT — one log line for the
 # speed monitor; a slow rate gets a warning that says what to do about it.
 # A machine on a ~2 MB/s link (2026-09-25) would have billed hours of GPU
-# time for an install that can never finish in a useful time.
+# time for an install that can never finish in a useful time. The estimate
+# covers only what is left: on 2026-11-14 a pod with one file to go was told
+# "about 11 h", for what was in fact ~20 minutes.
 download_rate_message() {
-    local bps="$1" total="$2" hours
+    local bps="$1" left="$2" secs
     local min_bps="${MINIMAX_MIN_BPS:-20000000}"
 
     if (( bps >= min_bps )); then
@@ -692,9 +757,18 @@ download_rate_message() {
         return 0
     fi
     if (( bps > 0 )); then
-        hours=$(( total / bps / 3600 ))
-        printf ' ⚠️  SLOW downloads: ~%d MB/s, about %d h for all the models.\n' \
-            $(( bps / 1000000 )) "$hours"
+        secs=$(( left / bps ))
+        if (( secs >= 7200 )); then
+            printf ' ⚠️  SLOW downloads: ~%d MB/s, about %d h for what is left.\n' \
+                $(( bps / 1000000 )) $(( secs / 3600 ))
+        else
+            printf ' ⚠️  SLOW downloads: ~%d MB/s, about %d min for what is left.\n' \
+                $(( bps / 1000000 )) $(( secs / 60 ))
+        fi
+        if (( secs < 3600 )); then
+            printf '    Little is left: waiting is cheaper than deploying again.\n'
+            return 0
+        fi
     else
         printf ' ⚠️  SLOW downloads: no progress in the last interval.\n'
     fi
@@ -702,17 +776,24 @@ download_rate_message() {
     printf '    and deploying again (another region or machine) instead of paying to wait.\n'
 }
 
-# download_monitor TOTAL_BYTES — runs in the background during phase 3 and
-# logs the download speed once per interval. It measures growth of the
-# staging dir; a finished file moves out of it, so a shrinking sample is
-# skipped (that means a file just completed, not a slow link).
+# download_monitor TOTAL_BYTES STATUS_DIR — runs in the background during
+# phase 3 and logs the download speed once per interval. It measures growth
+# of the staging dir; a finished file moves out of it, so a shrinking sample
+# is skipped (that means a file just completed, not a slow link). What is
+# left is the total minus the files marked ok and what is staged.
 download_monitor() {
-    local total="$1" interval="${MINIMAX_MONITOR_INTERVAL:-60}" prev now
+    local total="$1" status="$2" interval="${MINIMAX_MONITOR_INTERVAL:-60}"
+    local prev now finished left
     prev="$(du -sb "$STAGING" 2>/dev/null | cut -f1)"
     while sleep "$interval"; do
         now="$(du -sb "$STAGING" 2>/dev/null | cut -f1)"
         if [[ -n "$now" && -n "$prev" ]] && (( now >= prev )); then
-            download_rate_message $(( (now - prev) / interval )) "$total"
+            finished="$(active_manifest_lines | while IFS='|' read -r name _ bytes; do
+                [[ -e "$status/ok.$name" ]] && echo "$bytes"
+            done | awk '{s += $1} END {printf "%d", s}')"
+            left=$(( total - finished - now ))
+            (( left > 0 )) || left=0
+            download_rate_message $(( (now - prev) / interval )) "$left"
         fi
         prev="$now"
     done
@@ -738,7 +819,7 @@ phase3_models() {
     # once instead of queueing behind small files.
     # Started before the loop: 'wait -n' below only returns for jobs that
     # exit, and the monitor runs until it is killed after the downloads.
-    download_monitor "$total" &
+    download_monitor "$total" "$status" &
     local monitor_pid=$!
 
     local pids=()

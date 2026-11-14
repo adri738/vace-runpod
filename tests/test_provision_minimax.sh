@@ -382,6 +382,10 @@ assert_eq "a slow link is flagged" "1" "$(printf '%s' "$slow" | grep -c 'SLOW do
 assert_eq "a slow link says to terminate and redeploy" "1" "$(printf '%s' "$slow" | grep -c 'terminating the pod')"
 assert_eq "a slow link estimates the hours" "1" "$(printf '%s' "$slow" | grep -c 'about 10 h')"
 assert_eq "a stalled link is flagged, without dividing by zero" "1" "$(printf '%s' "$stalled" | grep -c 'no progress')"
+# 2026-11-14: one 13 GB file left at 10 MB/s is ~21 minutes, not hours.
+last="$(download_rate_message 10000000 13000000000)"
+assert_eq "little left: the estimate is in minutes" "1" "$(printf '%s' "$last" | grep -c 'about 21 min')"
+assert_eq "little left: no advice to redeploy" "0" "$(printf '%s' "$last" | grep -c 'terminating')"
 
 echo "-- fetch_mirror_file --"
 
@@ -414,6 +418,54 @@ assert_eq "fails when every transport fails" \
     "1 curl curl curl curl curl aria2c wget hf " "$(fetch_order none)"
 assert_eq "no token: fails without trying anything" "1 " \
     "$(: > "$calls"; HF_TOKEN= fetch_mirror_file m.bin "$TMP/out/m.bin" >/dev/null; echo "$? $(tr '\n' ' ' < "$calls")")"
-unset -f curl aria2c wget hf
+
+# With a known size (the models), a slow connection gets two tries and then
+# the parallel download, before any other transport.
+fetch_ranges() { echo ranges >> "$calls"; works ranges; }
+fetch_sized() {
+    : > "$calls"
+    WORKS="$1" HF_TOKEN=x STAGING="$TMP/stage" MINIMAX_RETRY_WAIT=0 \
+        fetch_mirror_file m.bin "$TMP/out/m.bin" 1000 >/dev/null
+    echo "$? $(tr '\n' ' ' < "$calls")"
+}
+assert_eq "a model that stays slow goes parallel after two curl tries" \
+    "0 curl curl ranges " "$(fetch_sized ranges)"
+assert_eq "a failed parallel download still falls back" \
+    "0 curl curl ranges aria2c " "$(fetch_sized aria2c)"
+unset -f curl aria2c wget hf fetch_ranges
+source provision_minimax.sh
+
+echo "-- parallel download --"
+
+# A stub server: answers -r FROM-TO with those bytes of $TMP/src.bin. With
+# SHORT set, it sends at most 3000 bytes per call, like a dropped connection.
+head -c 100000 /dev/urandom > "$TMP/src.bin"
+curl() {
+    local range="" k
+    for (( k = 1; k <= $#; k++ )); do [[ "${!k}" == -r ]] && { k=$(( k + 1 )); range="${!k}"; }; done
+    local from="${range%-*}" to="${range#*-}" len
+    len=$(( to - from + 1 ))
+    [[ -n "${SHORT:-}" ]] && (( len > 3000 )) && len=3000
+    [[ -n "${NORANGE:-}" ]] && { cat "$TMP/src.bin"; return 0; }
+    tail -c +$(( from + 1 )) "$TMP/src.bin" | head -c "$len"
+}
+ranged() {
+    rm -f "$TMP/r.bin"*
+    head -c "$1" "$TMP/src.bin" > "$TMP/r.bin"
+    MINIMAX_RANGE_PARTS=7 HF_TOKEN=x fetch_ranges u "$TMP/r.bin" 100000
+}
+assert_ok "resumes a partial file over parallel ranges" ranged 30000
+assert_ok "  ... and the result is byte-identical" cmp -s "$TMP/src.bin" "$TMP/r.bin"
+assert_eq "  ... and leaves no pieces behind" "0" "$(ls "$TMP" | grep -c 'r.bin.piece')"
+assert_ok "starts from an empty file" ranged 0
+assert_ok "  ... byte-identical" cmp -s "$TMP/src.bin" "$TMP/r.bin"
+assert_ok "an already complete file needs nothing" ranged 100000
+SHORT=1 assert_ok "connections that drop mid-range are resumed" ranged 30000
+assert_ok "  ... byte-identical" cmp -s "$TMP/src.bin" "$TMP/r.bin"
+NORANGE=1 assert_fail "a server that ignores Range is caught" ranged 30000
+head -c 100001 /dev/urandom > "$TMP/r.bin"
+assert_fail "an oversized partial is rejected" \
+    env MINIMAX_RANGE_PARTS=7 HF_TOKEN=x bash -c "source provision_minimax.sh; fetch_ranges u '$TMP/r.bin' 100000"
+unset -f curl
 
 finish
